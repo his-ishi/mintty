@@ -787,14 +787,21 @@ do_winop(void)
 }
 
 static void
-manage_ime(void)
+manage_ime(bool restore)
 {
-    int onoff;
-    switch (term.csi_argv[0]) {
-        when 0: onoff = 0;
-        when 1: onoff = 1;
-        default: onoff = ImmGetOpenStatus(imc) ? 0 : 1;
+    static int s_onoff = false;
+    if ( restore ) {
+        ImmSetOpenStatus(imc, s_onoff);
+        win_set_ime_open(s_onoff);
     }
+    else {
+        s_onoff = ImmGetOpenStatus(imc);
+    }
+}
+
+static void
+set_ime(int onoff)
+{
     ImmSetOpenStatus(imc, onoff);
     win_set_ime_open(onoff);
 }
@@ -926,8 +933,6 @@ do_csi(uchar c)
       }
       else
         do_winop();
-    when 'v':
-      manage_ime();
     when 'S':        /* SU: Scroll up */
       term_do_scroll(term.marg_top, term.marg_bot, arg0_def1, true);
       curs->wrapnext = false;
@@ -996,6 +1001,12 @@ do_csi(uchar c)
         when 0 or 2: term.curs.attr.attr &= ~ATTR_PROTECTED;
         when 1: term.curs.attr.attr |= ATTR_PROTECTED;
       }
+    when CPAIR('<', 't'):     /* set_ime */
+      set_ime(term.csi_argv[0]);
+    when CPAIR('<', 's'):     /* save ime */
+      manage_ime(false);
+    when CPAIR('<', 'r'):     /* restore ime */
+      manage_ime(true);
   }
 }
 
