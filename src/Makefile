@@ -58,7 +58,7 @@ else
   $(error Target '$(TARGET)' not supported)
 endif
 
-CPPFLAGS := -DTARGET=$(TARGET)
+CPPFLAGS := -DTARGET=$(TARGET) -DSTARTF_TITLEISLINKNAME=0x00000800 -DSTARTF_TITLEISAPPID=0x00001000
 
 ifndef RELEASE
   svn_rev := $(shell svn info 2>/dev/null | grep ^Revision: | sed 's/Revision: //')

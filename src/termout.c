@@ -3,6 +3,7 @@
 // Adapted from code from PuTTY-0.60 by Simon Tatham and team.
 // Licensed under the terms of the GNU General Public License v3 or later.
 
+#include "winpriv.h"
 #include "termpriv.h"
 
 #include "win.h"
@@ -786,6 +787,19 @@ do_winop(void)
 }
 
 static void
+manage_ime(void)
+{
+    int onoff;
+    switch (term.csi_argv[0]) {
+        when 0: onoff = 0;
+        when 1: onoff = 1;
+        default: onoff = ImmGetOpenStatus(imc) ? 0 : 1;
+    }
+    ImmSetOpenStatus(imc, onoff);
+    win_set_ime_open(onoff);
+}
+
+static void
 do_csi(uchar c)
 {
   term_cursor *curs = &term.curs;
@@ -912,6 +926,8 @@ do_csi(uchar c)
       }
       else
         do_winop();
+    when 'v':
+      manage_ime();
     when 'S':        /* SU: Scroll up */
       term_do_scroll(term.marg_top, term.marg_bot, arg0_def1, true);
       curs->wrapnext = false;
