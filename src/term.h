@@ -192,28 +192,29 @@ typedef struct {
   int *forward, *backward;      /* the permutations of line positions */
 } bidi_cache_entry;
 
-termline *newline(int cols, int bce);
-void freeline(termline *);
-void clearline(termline *);
-void resizeline(termline *, int);
+extern termline *newline(int cols, int bce);
+extern void freeline(termline *);
+extern void clearline(termline *);
+extern void resizeline(termline *, int);
 
-int sblines(void);
-termline *fetch_line(int y);
-void release_line(termline *);
+extern int sblines(void);
+extern termline *fetch_line(int y);
+extern void release_line(termline *);
 
-int termchars_equal(termchar *a, termchar *b);
-int termchars_equal_override(termchar *a, termchar *b, uint bchr, cattr battr);
+extern int termchars_equal(termchar *a, termchar *b);
+extern int termchars_equal_override(termchar *a, termchar *b, uint bchr, cattr battr);
+extern int termattrs_equal_fg(cattr * a, cattr * b);
 
-void copy_termchar(termline *destline, int x, termchar *src);
-void move_termchar(termline *line, termchar *dest, termchar *src);
+extern void copy_termchar(termline *destline, int x, termchar *src);
+extern void move_termchar(termline *line, termchar *dest, termchar *src);
 
-void add_cc(termline *, int col, wchar chr);
-void clear_cc(termline *, int col);
+extern void add_cc(termline *, int col, wchar chr, cattr attr);
+extern void clear_cc(termline *, int col);
 
-uchar *compressline(termline *);
-termline *decompressline(uchar *, int *bytes_used);
+extern uchar *compressline(termline *);
+extern termline *decompressline(uchar *, int *bytes_used);
 
-termchar *term_bidi_line(termline *, int scr_y);
+extern termchar *term_bidi_line(termline *, int scr_y);
 
 /* Traditional terminal character sets */
 typedef enum {
@@ -231,11 +232,6 @@ typedef enum {
   MBT_LEFT = 1, MBT_MIDDLE = 2, MBT_RIGHT = 3
 } mouse_button;
 
-typedef struct belltime {
-  struct belltime *next;
-  uint ticks;
-} belltime;
-
 enum {
   NO_UPDATE = 0,
   PARTIAL_UPDATE = 1,
@@ -250,19 +246,19 @@ typedef struct {
 } circbuf;
 
 typedef struct {
-    int x;
-    int y;
-    int len;
+  int x;
+  int y;
+  int len;
 } result;
 
 typedef struct {
-    result * results;
-    wchar * query;
-    int query_length;
-    int capacity;
-    int current;
-    int length;
-    int update_type;
+  result * results;
+  wchar * query;
+  int query_length;
+  int capacity;
+  int current;
+  int length;
+  int update_type;
 } termresults;
 
 typedef struct {
@@ -288,7 +284,7 @@ typedef struct {
   size_t position;
 } temp_strage_t;
 
-typedef struct _imglist {
+typedef struct imglist {
   unsigned char *pixels;
   void *hdc;
   void *hbmp;
@@ -299,7 +295,7 @@ typedef struct _imglist {
   int height;
   int pixelwidth;
   int pixelheight;
-  struct _imglist *next;
+  struct imglist *next;
 } imglist;
 
 typedef struct {
@@ -332,22 +328,22 @@ struct term {
 
   termchar erase_char;
 
-  char *inbuf;      /* terminal input buffer */
+  char *inbuf;            /* terminal input buffer */
   uint inbuf_size, inbuf_pos;
 
-  bool rvideo;   /* global reverse video flag */
-  bool cursor_on;        /* cursor enabled flag */
-  bool deccolm_allowed;  /* DECCOLM sequence for 80/132 cols allowed? */
-  bool reset_132;        /* Flag ESC c resets to 80 cols */
-  bool cblinker; /* When blinking is the cursor on ? */
-  bool tblinker; /* When the blinking text is on */
-  bool blink_is_real;    /* Actually blink blinking text */
-  bool echoing;  /* Does terminal want local echo? */
-  bool insert;   /* Insert mode */
-  int marg_top, marg_bot;  /* scroll margins */
+  bool rvideo;            /* global reverse video flag */
+  bool cursor_on;         /* cursor enabled flag */
+  bool deccolm_allowed;   /* DECCOLM sequence for 80/132 cols allowed? */
+  bool reset_132;         /* Flag ESC c resets to 80 cols */
+  bool cblinker;          /* When blinking is the cursor on ? */
+  bool tblinker;          /* When the blinking text is on */
+  bool blink_is_real;     /* Actually blink blinking text */
+  bool echoing;           /* Does terminal want local echo? */
+  bool insert;            /* Insert mode */
+  int marg_top, marg_bot; /* scroll margins */
   bool printing, only_printing;  /* Are we doing ANSI printing? */
-  int  print_state;      /* state of print-end-sequence scan */
-  char *printbuf;        /* buffered data for printer */
+  int  print_state;       /* state of print-end-sequence scan */
+  char *printbuf;         /* buffered data for printer */
   uint printbuf_size, printbuf_pos;
 
   int  rows, cols;
@@ -373,8 +369,10 @@ struct term {
   bool report_ambig_width;
   bool bracketed_paste;
   bool show_scrollbar;
+  bool wide_indic;
+  bool wide_extra;
 
-  bool sixel_display;  // true if sixel scrolling mode is off
+  bool sixel_display;        // true if sixel scrolling mode is off
   bool sixel_scrolls_right;  // on: sixel scrolling leaves cursor to right of graphic
                              // off(default): the position after sixel depends on sixel_scrolls_left
   bool sixel_scrolls_left;   // on: sixel scrolling moves cursor to beginning of the line
@@ -469,37 +467,37 @@ struct term {
 
 extern struct term term;
 
-void term_resize(int, int);
-void term_scroll(int, int);
-void term_reset(void);
-void term_clear_scrollback(void);
-void term_mouse_click(mouse_button, mod_keys, pos, int count);
-void term_mouse_release(mouse_button, mod_keys, pos);
-void term_mouse_move(mod_keys, pos);
-void term_mouse_wheel(int delta, int lines_per_notch, mod_keys, pos);
-void term_select_all(void);
-void term_paint(void);
-void term_invalidate(int left, int top, int right, int bottom);
-void term_open(void);
-void term_copy(void);
-void term_paste(wchar *, uint len);
-void term_send_paste(void);
-void term_cancel_paste(void);
-void term_reconfig(void);
-void term_flip_screen(void);
-void term_reset_screen(void);
-void term_write(const char *, uint len);
-void term_flush(void);
-void term_set_focus(bool has_focus, bool may_report);
-int  term_cursor_type(void);
-bool term_cursor_blinks(void);
-void term_hide_cursor(void);
+extern void term_resize(int, int);
+extern void term_scroll(int, int);
+extern void term_reset(void);
+extern void term_clear_scrollback(void);
+extern void term_mouse_click(mouse_button, mod_keys, pos, int count);
+extern void term_mouse_release(mouse_button, mod_keys, pos);
+extern void term_mouse_move(mod_keys, pos);
+extern void term_mouse_wheel(int delta, int lines_per_notch, mod_keys, pos);
+extern void term_select_all(void);
+extern void term_paint(void);
+extern void term_invalidate(int left, int top, int right, int bottom);
+extern void term_open(void);
+extern void term_copy(void);
+extern void term_paste(wchar *, uint len);
+extern void term_send_paste(void);
+extern void term_cancel_paste(void);
+extern void term_reconfig(void);
+extern void term_flip_screen(void);
+extern void term_reset_screen(void);
+extern void term_write(const char *, uint len);
+extern void term_flush(void);
+extern void term_set_focus(bool has_focus, bool may_report);
+extern int  term_cursor_type(void);
+extern bool term_cursor_blinks(void);
+extern void term_hide_cursor(void);
 
-void term_set_search(wchar * needle);
-void term_schedule_search_partial_update(void);
-void term_schedule_search_update(void);
-void term_update_search(void);
-void term_clear_results(void);
-void term_clear_search(void);
+extern void term_set_search(wchar * needle);
+extern void term_schedule_search_partial_update(void);
+extern void term_schedule_search_update(void);
+extern void term_update_search(void);
+extern void term_clear_results(void);
+extern void term_clear_search(void);
 
 #endif

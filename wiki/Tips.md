@@ -8,9 +8,10 @@ configuration and resources.
 For its configuration file, it reads ```/etc/minttyrc```, ```$APPDATA/mintty/config```, 
 ```~/.config/mintty/config```, ```~/.minttyrc```, in this order.
 
-For resource files to configure a colour scheme or wave file for the bell character,
-it looks for subfolders ```themes``` or ```sounds```, respectively, in one 
-of the directories ```~/.mintty```, ```~/.config/mintty```, 
+For resource files to configure a colour scheme, 
+wave file for the bell character, or localization files, it looks for 
+subfolders ```themes```, ```sounds```, or ```lang```, respectively, 
+in one of the directories ```~/.mintty```, ```~/.config/mintty```, 
 ```$APPDATA/mintty```, ```/usr/share/mintty```, whichever is found first.
 
 The ```~/.config/mintty``` folder is the XDG default base directory.
@@ -281,9 +282,16 @@ Mintty uses the Windows keyboard layout system with its “dead key” mechanism
 for entering accented characters, enhanced by self-composed characters 
 for dead-key combinations that Windows does not support (e.g. ẃ).
 
-X11, on the other hand, has the Compose key mechanism for this purpose.
+Mintty also provides a Compose key, configurable to Control, Shift or Alt,
+using X11 compose data. For example, if the compose key is configured 
+to be Control, pressing and release the Control key, followed by letters 
+`a` and `e`, will enter `æ`; Control-`-`-`,` will enter `¬`, 
+Control-`C`-`o` will enter `©`, Control-`<`-`<` will enter `«`, 
+Control-`c`-`,` will enter `ç`, Control-`s`-`s` will enter `ß`, 
+Control-`!`-`!` will enter `¡`, Control-`!`-`?` will enter `‽`, etc.
 
-The most seamless and stable **Compose Key for Windows** is 
+For a separate compose key solution, the most seamless and stable 
+**Compose Key for Windows** is 
 **[WinCompose](https://github.com/SamHocevar/wincompose)**.
 
 
@@ -435,6 +443,47 @@ LC_CTYPE=zh_SG.utf8 mintty &
 ```
 
 
+## Text and font rendering ##
+
+Mintty can make use of advanced Windows font fallback as provided by 
+Uniscribe, achieving improved font fallback.
+Use option `-o FontRender=uniscribe`.
+Note that Uniscribe is not applied to right-to-left text as it would 
+interfere with mintty’s own bidi transformation.
+
+Mintty supports a maximum of usual and unusual text attributes:
+
+| **start `^[[...m`**    | **end `^[[...m`** | **attribute**                 |
+|:-----------------------|:------------------|:------------------------------|
+| 1                      | 22                | bold                          |
+| 2                      | 22                | dim                           |
+| 3                      | 23                | italic                        |
+| 4                      | 24                | underline                     |
+| 5                      | 25                | blinking                      |
+| 7                      | 27                | inverse                       |
+| 8                      | 28                | invisible                     |
+| 9                      | 29                | strikeout                     |
+| 21                     | 24                | doubly underline              |
+| 53                     | 55                | overline                      |
+| 30...37                | 39                | foreground ANSI colour        |
+| 90...97                | 39                | foreground bright ANSI colour |
+| 40...47                | 49                | background ANSI colour        |
+| 100...107              | 49                | background bright ANSI colour |
+| 38;5;P                 | 39                | foreground palette colour     |
+| 48;5;P                 | 49                | background palette colour     |
+| 38;2;R;G;B             | 39                | foreground true colour        |
+| 48;2;R;G;B             | 49                | background true colour        |
+| _any_                  | 0                 |                               |
+
+As a fancy add-on feature for text attributes, mintty supports distinct 
+colour attributes for combining characters, so a combined character 
+can be displayed in multiple colours. Attributes considered for this 
+purpose are default and ANSI foreground colours, palette and true-colour 
+foreground colours, dim mode and manual bold mode (BoldAsFont=false); 
+background colours and inverse mode are ignored.
+<img src=https://github.com/mintty/mintty/wiki/mintty-coloured-combinings.png>
+
+
 ## Passing arguments from an environment with different character set ##
 
 To pass non-ASCII parameters to a command run from mintty using a specific 
@@ -474,6 +523,9 @@ but ```$PWD``` could be used if ```shopt promptvars``` is not unset.
 
 Note that after remote login, the directory path may be meaningless 
 unless the remote and local paths match.
+Note also that from a login terminal (e.g. using parameter `-` to start 
+a login shell), Alt+F2 starts again a login terminal, whose login shell 
+is likely to reset the working directory to the home directory.
 
 
 ## Multi-monitor support ##
@@ -506,6 +558,47 @@ gnuplot -e "splot [x=-3:3] [y=-3:3] sin(x) * cos(y)"
 
 Note that gnuplot uses black text on default background for captions 
 and coordinates so better not run it in a terminal with dark background.
+
+
+## Localization ##
+
+Mintty facilitates localization of its user interface, the Options dialog, 
+menus, message boxes, and terminal in-line error messages.
+The localization language can be selected with the option `Language`, 
+see manual page for details.
+
+Example:
+`Language=*`, environment variables `LANGUAGE=de_CH:français:de:fr_FR` and 
+`LC_MESSAGES=en_GB.UTF-8`, `LC_ALL` not set:
+mintty tries to find localization files (in this order) for 
+`de_CH`, `français`, `de`, `fr_FR`, `en_GB`, 
+then (as generic fallback) `fr` and `en`, 
+each in all resource configuration folders (subfolder `lang`).
+
+Note that Windows may already have localized the default entries of the 
+system menu, which makes the system menu language inconsistent because 
+mintty adds a few items here. Choose `Language=en` to 
+“reverse-localize” this, as well as the font and colour chooser dialogs.
+
+Choose `Language=en_US` to change `Colour` to `Color` in the menus.
+
+### Adding translations to localization ###
+
+Localization files for various language or language/region codes 
+are looked up in the resource configuration folders, subfolder `lang`.
+Mintty uses a simplified `gettext` file format but not the `gettext` library;
+all messages must be encoded in UTF-8, the Content-Type charset is ignored.
+
+To add a new language, copy `messages.pot` to the desired `.po` file 
+(including a region suffix if appropriate, like `fr_CH`) and add the 
+`msgstr` entries which are empty in the template. The tool `poedit` may 
+be used but remember to use UTF-8 encoding.
+
+Note that `&` marks in menu item labels define keyboard shortcuts to be 
+handled by Windows. The script `keycheck` with your `.po` file as parameter 
+checks for ambiguous shortcut entries; these are not errors but you may 
+consider to reduce ambiguities. Note that a future (or currently patched) 
+version of the `uniq` tool is needed to cover non-ASCII keyboard shortcuts.
 
 
 ## Running mintty stand-alone ##

@@ -11,6 +11,7 @@
 #include "winimg.h"
 
 #include <winnls.h>
+#include <usp10.h>  // Uniscribe
 
 
 enum {
@@ -115,7 +116,7 @@ brighten(colour c, colour against)
   // if we are closer to black than the contrast reference, rather darken
   bool darken = colour_dist(c, 0) < colour_dist(against, 0);
 #ifdef debug_brighten
-  printf ("%s %06X against %06X\n", darken ? "darkening" : "brighting", c, against);
+  printf("%s %06X against %06X\n", darken ? "darkening" : "brighting", c, against);
 #endif
 
   uint _brighter() {
@@ -135,24 +136,24 @@ brighten(colour c, colour against)
   if (darken) {
     bright = _darker();
 #ifdef debug_brighten
-    printf ("darker %06X -> %06X dist %d\n", c, bright, colour_dist(c, bright));
+    printf("darker %06X -> %06X dist %d\n", c, bright, colour_dist(c, bright));
 #endif
     if (colour_dist(bright, c) < thrsh || colour_dist(bright, against) < thrsh) {
       bright = _brighter();
 #ifdef debug_brighten
-      printf ("   fix %06X -> %06X dist %d/%d\n", c, bright, colour_dist(bright, c), colour_dist(bright, against));
+      printf("   fix %06X -> %06X dist %d/%d\n", c, bright, colour_dist(bright, c), colour_dist(bright, against));
 #endif
     }
   }
   else {
     bright = _brighter();
 #ifdef debug_brighten
-    printf ("lightr %06X -> %06X dist %d\n", c, bright, colour_dist(c, bright));
+    printf("lightr %06X -> %06X dist %d\n", c, bright, colour_dist(c, bright));
 #endif
     if (colour_dist(bright, c) < thrsh || colour_dist(bright, against) < thrsh) {
       bright = _darker();
 #ifdef debug_brighten
-      printf ("   fix %06X -> %06X dist %d/%d\n", c, bright, colour_dist(bright, c), colour_dist(bright, against));
+      printf("   fix %06X -> %06X dist %d/%d\n", c, bright, colour_dist(bright, c), colour_dist(bright, against));
 #endif
     }
   }
@@ -214,12 +215,29 @@ row_padding(int i, int e)
 }
 
 static void
-show_msg(wstring msg, wstring title)
+show_font_warning(char * msg)
 {
-  if (fprintf(stderr, "%ls", title) < 0 || fputs("\n", stderr) < 0 ||
-      fprintf(stderr, "%ls", msg) < 0 || fputs("\n", stderr) < 0 ||
-      fflush(stderr) < 0)
-    MessageBoxW(0, msg, title, MB_ICONWARNING);
+  // suppress multiple font error messages
+  static wchar * msgfont = null;
+  if (msgfont && wcscmp(msgfont, cfg.font.name) == 0) {
+    return;
+  }
+  else {
+    if (msgfont)
+      free(msgfont);
+    msgfont = wcsdup(cfg.font.name);
+  }
+
+  char * fn = cs__wcstoutf(cfg.font.name);
+  char * fullmsg;
+  int len = asprintf(&fullmsg, "%s:\n%s", msg, fn);
+  free(fn);
+  if (len > 0) {
+    show_message(fullmsg, MB_ICONWARNING);
+    free(fullmsg);
+  }
+  else
+    show_message(msg, MB_ICONWARNING);
 }
 
 #ifndef TCI_SRCLOCALE
@@ -250,7 +268,7 @@ adjust_font_weights(void)
   if (wcslen(cfg.font.name) < lengthof(lf.lfFaceName))
     wcscpy(lf.lfFaceName, cfg.font.name);
   else
-    wcscpy(lf.lfFaceName, W("Lucida Console"));
+    wcscpy(lf.lfFaceName, W(""));
 #endif
   lf.lfPitchAndFamily = 0;
   //lf.lfCharSet = ANSI_CHARSET;   // report only ANSI character range
@@ -303,14 +321,14 @@ adjust_font_weights(void)
 
   // check if no font found
   if (!font_found) {
-    show_msg(_W("Font not found, using system substitute"), cfg.font.name);
+    show_font_warning(_("Font not found, using system substitute"));
     fw_norm = 400;
     fw_bold = 700;
     trace_font(("//\n"));
     return;
   }
   if (!ansi_found && !cs_found) {
-    show_msg(_W("Font has limited support for character ranges"), cfg.font.name);
+    show_font_warning(_("Font has limited support for character ranges"));
   }
 
   // find available widths closest to selected widths
@@ -383,6 +401,8 @@ win_init_fonts(int size)
 
   bold_mode = cfg.bold_as_font ? BOLD_FONT : BOLD_SHADOW;
   und_mode = UND_FONT;
+  if (cfg.underl_manual || cfg.underl_colour != (colour)-1)
+    und_mode = UND_LINE;
 
   if (cfg.font.weight) {
     fw_norm = cfg.font.weight;
@@ -421,11 +441,22 @@ win_init_fonts(int size)
 
   fonts[FONT_NORMAL] = create_font(fw_norm, false);
 
-  GetObject(fonts[FONT_NORMAL], sizeof (LOGFONT), &lfont);
+  GetObject(fonts[FONT_NORMAL], sizeof(LOGFONT), &lfont);
   trace_font(("created font %s %ld it %d cs %d\n", lfont.lfFaceName, (long int)lfont.lfWeight, lfont.lfItalic, lfont.lfCharSet));
 
   SelectObject(dc, fonts[FONT_NORMAL]);
   GetTextMetrics(dc, &tm);
+
+  if (!tm.tmHeight) {
+    // corrupt font installation (e.g. deleted font file)
+    show_font_warning(_("Font installation corrupt, using system substitute"));
+    wstrset(&cfg.font.name, W(""));
+    fonts[FONT_NORMAL] = create_font(fw_norm, false);
+    GetObject(fonts[FONT_NORMAL], sizeof(LOGFONT), &lfont);
+    SelectObject(dc, fonts[FONT_NORMAL]);
+    GetTextMetrics(dc, &tm);
+  }
+
   row_spacing = row_padding(tm.tmInternalLeading, tm.tmExternalLeading);
   trace_font(("h %ld asc %ld dsc %ld ild %ld eld %ld %ls\n", (long int)tm.tmHeight, (long int)tm.tmAscent, (long int)tm.tmDescent, (long int)tm.tmInternalLeading, (long int)tm.tmExternalLeading, cfg.font.name));
   row_spacing += cfg.row_spacing;
@@ -438,7 +469,7 @@ win_init_fonts(int size)
 #ifdef check_charset_only_for_returned_font
   int default_charset = get_default_charset();
   if (tm.tmCharSet != default_charset && default_charset != DEFAULT_CHARSET) {
-    show_msg(_W("Font does not support system locale"), cfg.font.name);
+    show_font_warning(_("Font does not support system locale"));
   }
 #endif
 
@@ -515,11 +546,9 @@ win_init_fonts(int size)
   * go all the way across the character cell, we only search
   * down a single column of the bitmap, half way across.)
   */
-  {
+  if (und_mode == UND_FONT) {
     HDC und_dc;
     HBITMAP und_bm, und_oldbm;
-    int i, gotit;
-    COLORREF c;
 
     und_dc = CreateCompatibleDC(dc);
     und_bm = CreateCompatibleBitmap(dc, cell_width, cell_height);
@@ -529,10 +558,16 @@ win_init_fonts(int size)
     SetTextColor(und_dc, RGB(255, 255, 255));
     SetBkColor(und_dc, RGB(0, 0, 0));
     SetBkMode(und_dc, OPAQUE);
-    ExtTextOut(und_dc, 0, 0, ETO_OPAQUE, null, " ", 1, null);
-    gotit = false;
-    for (i = 0; i < cell_height; i++) {
-      c = GetPixel(und_dc, cell_width / 2, i);
+    ExtTextOutA(und_dc, 0, 0, ETO_OPAQUE, null, " ", 1, null);
+
+    bool gotit = false;
+    // look for font-generated underline in character cell
+    //int i = 0;
+    // look for font-generated underline in descender section only
+    int i = tm.tmAscent;
+    //int i = tm.tmAscent + 1;
+    for (; i < cell_height; i++) {
+      COLORREF c = GetPixel(und_dc, cell_width / 2, i);
       if (c != RGB(0, 0, 0))
         gotit = true;
     }
@@ -656,9 +691,14 @@ win_paint(void)
   EndPaint(wnd, &p);
 }
 
+#define dont_debug_cursor 1
+
 static void
 do_update(void)
 {
+#if defined(debug_cursor) && debug_cursor > 1
+  printf("do_update cursor_on %d @%d,%d\n", term.cursor_on, term.curs.y, term.curs.x);
+#endif
   if (update_state == UPDATE_BLOCKED) {
     update_state = UPDATE_IDLE;
     return;
@@ -762,8 +802,6 @@ another_font(int fontno)
   printf("font [%02X]: %d (size %d) %d w%4d i%d u%d s%d\n", fontno, font_height * (1 + !!(fontno & FONT_HIGH)), font_size, x, w, i, u, s);
 #endif
   fonts[fontno] =
-    // workaround: remove effect of row_spacing from font creation;
-    // to be checked: usages of cell_height elsewhere
     CreateFontW(font_height * (1 + !!(fontno & FONT_HIGH)), x, 0, 0, w, i, u, s,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 get_font_quality(), FIXED_PITCH | FF_DONTCARE, cfg.font.name);
@@ -784,10 +822,8 @@ win_set_ime_open(bool open)
 
 #define dont_debug_win_text
 
-#ifdef debug_win_text
-
-void
-trace_line(char * tag, wchar * text, int len)
+static void
+_trace_line(char * tag, wchar * text, int len)
 {
   bool show = false;
   for (int i = 0; i < len; i++)
@@ -799,7 +835,13 @@ trace_line(char * tag, wchar * text, int len)
   }
 }
 
-#else
+inline static void
+trace_line(char * tag, wchar * text, int len)
+{
+  _trace_line(tag, text, len);
+}
+
+#ifndef debug_win_text
 #define trace_line(tag, text, len)	
 #endif
 
@@ -854,6 +896,27 @@ combsubst(wchar comb)
   return comb;
 }
 
+int
+termattrs_equal_fg(cattr * a, cattr * b)
+{
+  if (a->truefg != b->truefg)
+    return false;
+#define ATTR_COLOUR_MASK (ATTR_FGMASK | ATTR_BOLD | ATTR_DIM)
+  if ((a->attr & ATTR_COLOUR_MASK) != (b->attr & ATTR_COLOUR_MASK))
+    return false;
+  return true;
+}
+
+
+static int
+char1ulen(wchar * text)
+{
+  if ((text[0] & 0xFC00) == 0xD800 && (text[1] & 0xFC00) == 0xDC00)
+    return 2;
+  else
+    return 1;
+}
+
 /*
  * Draw a line of text in the window, at given character
  * coordinates, in given attributes.
@@ -861,7 +924,7 @@ combsubst(wchar comb)
  * We are allowed to fiddle with the contents of `text'.
  */
 void
-win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl)
+win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int lattr, bool has_rtl)
 {
   trace_line("win_text:", text, len);
   lattr &= LATTR_MODE;
@@ -902,7 +965,8 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
     nfont |= FONT_UNDERLINE;
   if (attr.attr & ATTR_ITALIC)
     nfont |= FONT_ITALIC;
-  if (attr.attr & ATTR_STRIKEOUT)
+  if (attr.attr & ATTR_STRIKEOUT
+      && !cfg.underl_manual && cfg.underl_colour == (colour)-1)
     nfont |= FONT_STRIKEOUT;
   another_font(nfont);
 
@@ -1008,12 +1072,24 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
       if (too_close && colour_dist(cursor_colour, fg) < mindist)
         fg = bg;
       bg = cursor_colour;
+#ifdef debug_cursor
+      printf("set cursor (colour %06X) @(row %d col %d) cursor_on %d\n", bg, (y - PADDING) / cell_height, (x - PADDING) / char_width, term.cursor_on);
+#endif
     }
   }
 
   SelectObject(dc, fonts[nfont]);
   SetTextColor(dc, fg);
   SetBkColor(dc, bg);
+
+#define dont_debug_missing_glyphs
+#ifdef debug_missing_glyphs
+  ushort glyph[len];
+  GetGlyphIndicesW(dc, text, len, glyph, true);
+  for (int i = 0; i < len; i++)
+    if (glyph[i] == 0xFFFF)
+      printf(" %04X -> no glyph\n", text[i]);
+#endif
 
  /* Check whether the text has any right-to-left characters */
 #ifdef check_rtl_here
@@ -1048,12 +1124,46 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
     eto_options |= ETO_GLYPH_INDEX;
   }
 
+
   bool combining = attr.attr & TATTR_COMBINING;
   bool combining_double = attr.attr & TATTR_COMBDOUBL;
   if (combining_double)
     combining = false;
 
-  int width = char_width * (combining ? 1 : len);
+  bool let_windows_combine = false;
+  if (combining) {
+   /* Substitute combining characters by overprinting lookalike glyphs */
+    for (int i = 0; i < len; i++)
+      text[i] = combsubst(text[i]);
+   /* Determine characters that should be combined by Windows */
+    if (len == 2) {
+      if (text[0] == 'i' && (text[1] == 0x030F || text[1] == 0x0311))
+        let_windows_combine = true;
+     /* Enforce separate combining characters display if colours differ */
+      if (!termattrs_equal_fg(&textattr[1], &attr))
+        let_windows_combine = false;
+    }
+  }
+
+  int graph = (attr.attr >> ATTR_GRAPH_SHIFT) & 0xFF;
+  if (graph) {
+    for (int i = 0; i < len; i++)
+      text[i] = ' ';
+  }
+
+ /* Array with offsets between neighbouring characters */
+  int dxs[len];
+  int dx = combining ? 0 : char_width;
+  for (int i = 0; i < len; i++)
+    dxs[i] = dx;
+
+  int ulen = 0;
+  for (int i = 0; i < len; i++) {
+    ulen++;
+    if (char1ulen(&text[i]) == 2)
+      i++;  // skip low surrogate;
+  }
+  int width = char_width * (combining ? 1 : ulen);
   RECT box = {
     .top = y, .bottom = y + cell_height,
     .left = x, .right = min(x + width, cell_width * term.cols + PADDING)
@@ -1063,31 +1173,52 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
     box2.left -= char_width;
   }
 
- /* Array with offsets between neighbouring characters */
-  int dxs[len];
-  int dx = combining ? 0 : char_width;
-  for (int i = 0; i < len; i++)
-    dxs[i] = dx;
 
-  bool let_windows_combine = false;
-  if (combining) {
-   /* Substitute combining characters by overprinting lookalike glyphs */
-    for (int i = 0; i < len; i++)
-      text[i] = combsubst(text[i]);
-   /* Determine characters that should be combined by Windows */
-    if (len == 2)
-      if (text[0] == 'i' && (text[1] == 0x030F || text[1] == 0x0311))
-        let_windows_combine = true;
+ /* Uniscribe handling */
+  bool use_uniscribe = cfg.font_render == FR_UNISCRIBE && !has_rtl;
+  SCRIPT_STRING_ANALYSIS ssa;
+
+  void
+  text_out_start(HDC hdc, LPCWSTR psz, int cch, int *dxs)
+  {
+    if (cch == 0)
+      use_uniscribe = false;
+    if (!use_uniscribe)
+      return;
+
+    HRESULT hr = ScriptStringAnalyse(hdc, psz, cch, 0, -1, 
+      // could | SSA_FIT and use `width` (from win_text) instead of MAXLONG
+      // to justify to monospace cell widths;
+      // SSA_LINK is needed for Hangul and default-size CJK
+      SSA_GLYPHS | SSA_FALLBACK | SSA_LINK, MAXLONG, 
+      NULL, NULL, dxs, NULL, NULL, &ssa);
+    if (!SUCCEEDED(hr) && hr != USP_E_SCRIPT_NOT_IN_FONT)
+      use_uniscribe = false;
   }
 
+  void
+  text_out(HDC hdc, int x, int y, UINT fuOptions, RECT *prc, LPCWSTR psz, int cch, int *dxs)
+  {
+    if (cch == 0)
+      return;
+
+    if (use_uniscribe)
+      ScriptStringOut(ssa, x, y, fuOptions, prc, 0, 0, FALSE);
+    else
+      ExtTextOutW(hdc, x, y, fuOptions, prc, psz, cch, dxs);
+  }
+
+  void
+  text_out_end()
+  {
+    if (use_uniscribe)
+      ScriptStringFree(&ssa);
+  }
+
+
+ /* Begin text output */
   int yt = y + (row_spacing / 2) - (lattr == LATTR_BOT ? cell_height : 0);
   int xt = x + (cfg.col_spacing / 2);
-
-  int graph = (attr.attr >> ATTR_GRAPH_SHIFT) & 0xFF;
-  if (graph) {
-    for (int i = 0; i < len; i++)
-      text[i] = ' ';
-  }
 
  /* Determine shadow/overstrike bold or double-width/height width */
   int xwidth = 1;
@@ -1111,6 +1242,11 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
   // Yet disabling it for some (heuristically determined) cases:
   if (let_windows_combine)
     combining = false;  // disable separate combining characters display
+
+  if (combining || combining_double)
+    *dxs = char_width;  // convince Windows to apply font underlining
+  text_out_start(dc, text, len, dxs);
+
   for (int xoff = 0; xoff < xwidth; xoff++)
     if (combining || combining_double) {
       // Workaround for mangled display of combining characters;
@@ -1118,27 +1254,67 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
       // presentation forms are not combining characters anymore at this point.
       // Repeat the workaround for bold/wide below.
 
+      if (xoff)
+        // restore base character colour in case of distinct combining colours
+        SetTextColor(dc, fg);
+
       // base character
-      ExtTextOutW(dc, xt + xoff, yt, eto_options | overwropt, &box, text, 1, dxs);
+      int ulen = char1ulen(text);
+      text_out(dc, xt + xoff, yt, eto_options | overwropt, &box, text, ulen, dxs);
+
       if (overwropt) {
         SetBkMode(dc, TRANSPARENT);
         overwropt = 0;
       }
       // combining characters
-      for (int i = 1; i < len; i++) {
+      textattr[0] = attr;
+      for (int i = ulen; i < len; i += ulen) {
+        // separate stacking of combining characters 
+        // does not work with Uniscribe
+        use_uniscribe = false;
+
         int xx = xt + xoff;
         if (combining_double && combiningdouble(text[i]))
           xx -= char_width / 2;
-        ExtTextOutW(dc, xx, yt, eto_options, &box2, &text[i], 1, dxs);
+        if (!termattrs_equal_fg(&textattr[i], &textattr[i - 1])) {
+          // determine colour to be used for combining characters;
+          // simplified version of the algorithm above
+          colour_i fgi = (textattr[i].attr & ATTR_FGMASK) >> ATTR_FGSHIFT;
+          if (term.rvideo) {
+            if (fgi >= 256)
+              fgi ^= 2;     // (BOLD_)?FG_COLOUR_I <-> (BOLD_)?BG_COLOUR_I
+          }
+          if (textattr[i].attr & ATTR_BOLD && cfg.bold_as_colour) {
+            if (fgi < 8) {
+              fgi |= 8;     // (BLACK|...|WHITE)_I -> BOLD_(BLACK|...|WHITE)_I
+            }
+            else if (fgi >= 256 && fgi != TRUE_COLOUR && !cfg.bold_as_font) {
+              fgi |= 1;     // (FG|BG)_COLOUR_I -> BOLD_(FG|BG)_COLOUR_I
+            }
+          }
+          colour fg = fgi >= TRUE_COLOUR ? textattr[i].truefg : colours[fgi];
+          if (textattr[i].attr & ATTR_DIM) {
+            fg = (fg & 0xFEFEFEFE) >> 1; // Halve the brightness.
+            if (!cfg.bold_as_colour || fgi >= 256)
+              fg += (bg & 0xFEFEFEFE) >> 1; // Blend with background.
+          }
+          if (textattr[i].attr & ATTR_INVISIBLE)
+            fg = bg;
+
+          SetTextColor(dc, fg);
+        }
+        ulen = char1ulen(&text[i]);
+        text_out(dc, xx, yt, eto_options, &box2, &text[i], ulen, &dxs[i]);
       }
     }
     else {
-      ExtTextOutW(dc, xt + xoff, yt, eto_options | overwropt, &box, text, len, dxs);
+      text_out(dc, xt + xoff, yt, eto_options | overwropt, &box, text, len, dxs);
       if (overwropt) {
         SetBkMode(dc, TRANSPARENT);
         overwropt = 0;
       }
     }
+  text_out_end();
 
   int line_width = (3
                     + (attr.attr & ATTR_BOLD ? 2 : 0)
@@ -1236,8 +1412,11 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
   if (uloff >= cell_height)
     uloff = cell_height - 1;
 
+  if (cfg.underl_colour != (colour)-1)
+    ul = cfg.underl_colour;
 #ifdef debug_underline
-  ul = 0x802020E0;
+  if (cfg.underl_colour == (colour)-1)
+    ul = 0x802020E0;
   if (lattr == LATTR_TOP)
     ul = 0x80E0E020;
   if (lattr == LATTR_BOT)
@@ -1268,6 +1447,19 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
     DeleteObject(oldpen);
   }
 
+ /* Strikeout */
+  if (attr.attr & ATTR_STRIKEOUT
+      && (cfg.underl_manual || cfg.underl_colour != (colour)-1)) {
+    int soff = (descent + (row_spacing / 2)) * 2 / 3;
+    HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, ul));
+    for (int l = 0; l < line_width; l++) {
+      MoveToEx(dc, x, y + soff + l, null);
+      LineTo(dc, x + len * char_width, y + soff + l);
+    }
+    oldpen = SelectObject(dc, oldpen);
+    DeleteObject(oldpen);
+  }
+
  /* Overline */
   if (lattr != LATTR_BOT && attr.attr & ATTR_OVERL) {
     HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, ul));
@@ -1280,6 +1472,9 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
   }
 
   if (has_cursor) {
+#if defined(debug_cursor) && debug_cursor > 1
+    printf("painting cursor_type '%c' cursor_on %d\n", "?b_l"[term_cursor_type()+1], term.cursor_on);
+#endif
     HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, cursor_colour));
     switch (term_cursor_type()) {
       when CUR_BLOCK:
@@ -1457,7 +1652,7 @@ win_set_colour(colour_i i, colour c)
   }
   colours[i] = c;
 #ifdef debug_brighten
-  printf ("colours[%d] = %06X\n", i, c);
+  printf("colours[%d] = %06X\n", i, c);
 #endif
   switch (i) {
     when FG_COLOUR_I:
@@ -1520,9 +1715,9 @@ win_reset_colours(void)
   for (uint r = 0; r < 6; r++)
     for (uint g = 0; g < 6; g++)
       for (uint b = 0; b < 6; b++)
-        colours[i++] = RGB (r ? r * 40 + 55 : 0,
-                            g ? g * 40 + 55 : 0,
-                            b ? b * 40 + 55 : 0);
+        colours[i++] = RGB(r ? r * 40 + 55 : 0,
+                           g ? g * 40 + 55 : 0,
+                           b ? b * 40 + 55 : 0);
 
   // Grayscale
   for (uint s = 0; s < 24; s++) {

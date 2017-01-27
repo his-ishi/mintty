@@ -86,8 +86,11 @@ ifeq ($(shell VER=`$(CC) -dumpversion`; expr $${VER%.*} '>=' 4.5), 1)
   CFLAGS += -mtune=atom
 endif
 
+scriptlib=-lusp10
 LDFLAGS := -L$(shell $(CC) -print-file-name=w32api) -static-libgcc
-LDLIBS := -mwindows -lcomctl32 -limm32 -lwinmm -lwinspool -lole32 -luuid
+LDLIBS := -mwindows $(scriptlib) -lcomctl32 -limm32 -lwinmm -lwinspool -lole32 -luuid
+#override LDFLAGS += -L$(shell $(CC) -print-file-name=w32api) -static-libgcc
+#override LDLIBS += -mwindows $(scriptlib) -lcomctl32 -limm32 -lwinmm -lwinspool -lole32 -luuid
 
 ifdef DEBUG
   CFLAGS += -g
@@ -183,6 +186,23 @@ unicode:	UnicodeData.txt Blocks.txt EastAsianWidth.txt
 %.txt:
 	$(WGET) http://unicode.org/Public/UNIDATA/$@
 
+#compose_list=/usr/share/X11/locale/en_US.UTF-8/Compose
+#keysymdefs=/usr/include/X11/keysymdef.h
+
+composed.t:	# $(compose_list) $(keysymdefs)
+	sh ./mkcomposedt > composed.t
+
+XGETTEXT_OPTS=--package-name=mintty #--package-version=$(version)
+#XGETTEXT_OPTS+=--msgid-bugs-address=mintty@...
+
+_:	localization checkloc
+localization:
+	mkdir -p ../lang
+	xgettext --from-code=UTF-8 -k_ -k_W -k__ -c__ $(XGETTEXT_OPTS) *.c appinfo.h -o- | grep -v "^#, c-format" > ../lang/messages.pot
+	cd ../lang; for po in *.po; do [ "$$po" = en.po ] || msgmerge -U "$$po" messages.pot; done
+checkloc:
+	cd ../lang; ! grep "^#, fuzzy" *.po
+
 #############################################################################
 # release targets
 
@@ -223,7 +243,7 @@ clean:
 	#rm -rf *.d *.o $(NAME)*
 	rm -rf $(BINDIR)/*.d $(BINDIR)/*.o $(BINDIR)/$(NAME)*
 
-check:	checksrc checkresource
+check:	checksrc checkresource checkloc
 
 # check whether supportedOS Id list is up-to-date
 stripsupp=sed -e "/supportedOS/ s,>.*,>," -e t -e d
@@ -239,6 +259,7 @@ checksrc:
 	if egrep -a -e "^(f*printf|#define debug)" *.[hc]; then false; fi
 	if egrep -e "^(if|do|for|while) *[({]" *.c; then false; fi
 	if egrep -e "\((false|0) *&" *.c; then false; fi
+	if egrep -e "\((true|1) *\|" *.c; then false; fi
 	if egrep -e "& 0($|[^bx])" *.c; then false; fi
 
 #############################################################################

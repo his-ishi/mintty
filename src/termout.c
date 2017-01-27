@@ -30,7 +30,8 @@ static string primary_da2 = "\e[?62;1;2;4;6;22c";
 static string primary_da3 = "\e[?63;1;2;4;6;22c";
 
 
-static bool term_push_cmd(char c)
+static bool
+term_push_cmd(char c)
 {
   uint new_size;
 
@@ -56,10 +57,11 @@ static bool term_push_cmd(char c)
 }
 
 /*
- * Move the cursor to a given position, clipping at boundaries. We
- * may or may not want to clip at the scroll margin: marg_clip is 0
- * not to, 1 to disallow _passing_ the margins, and 2 to disallow
- * even _being_ outside the margins.
+ * Move the cursor to a given position, clipping at boundaries.
+ * We may or may not want to clip at the scroll margin: marg_clip is
+ * 0 not to,
+ * 1 to disallow _passing_ the margins, and
+ * 2 to disallow even _being_ outside the margins.
  */
 static void
 move(int x, int y, int marg_clip)
@@ -111,8 +113,8 @@ restore_cursor(void)
     curs->y = term.rows - 1;
 
  /*
-  * wrapnext might reset to False if the x position is no
-  * longer at the rightmost edge.
+  * wrapnext might reset to False 
+  * if the x position is no longer at the rightmost edge.
   */
   if (curs->wrapnext && curs->x < term.cols - 1)
     curs->wrapnext = false;
@@ -121,8 +123,8 @@ restore_cursor(void)
 }
 
 /*
- * Insert or delete characters within the current line. n is +ve if
- * insertion is desired, and -ve for deletion.
+ * Insert or delete characters within the current line.
+ * n is +ve if insertion is desired, and -ve for deletion.
  */
 static void
 insert_char(int n)
@@ -268,23 +270,17 @@ write_char(wchar c, int width)
       put_char(c);
     when 2 or 3:  // Double-width char (Triple-width was an experimental option).
      /*
-      * If we're about to display a double-width
-      * character starting in the rightmost
-      * column, then we do something special
-      * instead. We must print a space in the
-      * last column of the screen, then wrap;
-      * and we also set LATTR_WRAPPED2 which
-      * instructs subsequent cut-and-pasting not
-      * only to splice this line to the one
-      * after it, but to ignore the space in the
-      * last character position as well.
-      * (Because what was actually output to the
-      * terminal was presumably just a sequence
-      * of CJK characters, and we don't want a
-      * space to be pasted in the middle of
-      * those just because they had the
-      * misfortune to start in the wrong parity
-      * column. xterm concurs.)
+      * If we're about to display a double-width character 
+      * starting in the rightmost column, 
+      * then we do something special instead.
+      * We must print a space in the last column of the screen, then wrap;
+      * and we also set LATTR_WRAPPED2 which instructs subsequent 
+      * cut-and-pasting not only to splice this line to the one after it, 
+      * but to ignore the space in the last character position as well.
+      * (Because what was actually output to the terminal was presumably 
+      * just a sequence of CJK characters, and we don't want a space to be
+      * pasted in the middle of those just because they had the misfortune 
+      * to start in the wrong parity column. xterm concurs.)
       */
       term_check_boundary(curs->x, curs->y);
       term_check_boundary(curs->x + width, curs->y);
@@ -308,25 +304,31 @@ write_char(wchar c, int width)
         curs->x += width - 2;
 #endif
       put_char(UCSWIDE);
-    when 0:  // Combining character.
+    when 0 or -1:  // Combining character or Low surrogate.
+#ifdef debug_surrogates
+      printf("write_char %04X %2d %08llX\n", c, width, curs->attr.attr);
+#endif
       if (curs->x > 0) {
        /* If we're in wrapnext state, the character
         * to combine with is _here_, not to our left. */
         int x = curs->x - !curs->wrapnext;
        /*
-        * If the previous character is
-        * UCSWIDE, back up another one.
+        * If the previous character is UCSWIDE, back up another one.
         */
         if (line->chars[x].chr == UCSWIDE) {
           assert(x > 0);
           x--;
         }
        /* Try to precompose with the cell's base codepoint */
-        wchar pc = win_combine_chars(line->chars[x].chr, c);
+        wchar pc;
+        if (termattrs_equal_fg(&line->chars[x].attr, &curs->attr))
+          pc = win_combine_chars(line->chars[x].chr, c);
+        else
+          pc = 0;
         if (pc)
           line->chars[x].chr = pc;
         else
-          add_cc(line, x, c);
+          add_cc(line, x, c, curs->attr);
       }
       return;
     otherwise:  // Anything else. Probably shouldn't get here.
@@ -674,8 +676,9 @@ set_modes(bool state)
           term.app_escape_key = state;
         when 7728:       /* Escape sends FS (instead of ESC) */
           term.escape_sends_fs = state;
-        when 7730:       /* on: sixel scrolling moves cursor to beginning of the line
-                            off(default): sixel scrolling moves cursor to left of graphics */
+        when 7730:
+          /* on: sixel scrolling moves cursor to beginning of the line
+             off(default): sixel scrolling moves cursor to left of graphics */
           term.sixel_scrolls_left = state;
         when 7766:       /* 'B': Show/hide scrollbar (if enabled in config) */
           if (state != term.show_scrollbar) {
@@ -691,8 +694,9 @@ set_modes(bool state)
           term.wheel_reporting = state;
         when 7787:       /* 'W': Application mousewheel mode */
           term.app_wheel = state;
-        when 8452:       /* on: sixel scrolling leaves cursor to right of graphic
-                            off(default): the position after sixel depends on sixel_scrolls_left */
+        when 8452:
+          /* on: sixel scrolling leaves cursor to right of graphic
+             off(default): position after sixel depends on sixel_scrolls_left */
           term.sixel_scrolls_right = state;
         /* Application control key modes */
         when 77000 ... 77031: {
@@ -823,8 +827,12 @@ do_csi(uchar c)
       move(curs->x, curs->y + arg0_def1, 1);
     when 'B':        /* CUD: Cursor down */
       move(curs->x, curs->y + arg0_def1, 1);
-    when CPAIR('>', 'c'):     /* DA: report version */
-      child_printf("\e[>77;%u;0c", DECIMAL_VERSION);
+    when 'c':        /* Primary DA: report device/terminal type */
+      if (!arg0)
+        write_primary_da();
+    when CPAIR('>', 'c'):     /* Secondary DA: report device version */
+      if (!arg0)
+        child_printf("\e[>77;%u;0c", DECIMAL_VERSION);
     when 'a':        /* HPR: move right N cols */
       move(curs->x + arg0_def1, curs->y, 1);
     when 'C':        /* CUF: Cursor right */
@@ -835,7 +843,7 @@ do_csi(uchar c)
       move(0, curs->y + arg0_def1, 1);
     when 'F':        /* CPL: move up N lines and CR */
       move(0, curs->y - arg0_def1, 1);
-    when 'G' or '`':  /* CHA or HPA: set horizontal position */
+    when 'G' or '`': /* CHA or HPA: set horizontal position */
       move(arg0_def1 - 1, curs->y, 0);
     when 'd':        /* VPA: set vertical position */
       move(curs->x,
@@ -871,8 +879,6 @@ do_csi(uchar c)
       insert_char(arg0_def1);
     when 'P':        /* DCH: delete chars */
       insert_char(-arg0_def1);
-    when 'c':        /* DA: terminal type query */
-      write_primary_da();
     when 'n':        /* DSR: cursor position query */
       if (arg0 == 6)
         child_printf("\e[%d;%dR", curs->y + 1, curs->x + 1);
@@ -924,8 +930,8 @@ do_csi(uchar c)
      /*
       * VT340/VT420 sequence DECSLPP, for setting the height of the window.
       * DEC only allowed values 24/25/36/48/72/144, so dtterm and xterm
-      * claimed values below 24 for various window operations, and also
-      * allowed any number of rows from 24 and above to be set.
+      * claimed values below 24 for various window operations, 
+      * and also allowed any number of rows from 24 and above to be set.
       */
       if (arg0 >= 24) {
         win_set_chars(arg0, term.cols);
@@ -1392,6 +1398,15 @@ do_cmd(void)
       *s = 0;
       child_printf("\e]7771;!%s\e\\", term.cmd_buf);
     }
+    when 77119: {
+      int what = atoi(s);
+      term.wide_indic = false;
+      term.wide_extra = false;
+      if (what & 1)
+        term.wide_indic = true;
+      if (what & 2)
+        term.wide_extra = true;
+    }
     when 52: do_clipboard();
   }
 }
@@ -1425,8 +1440,7 @@ term_write(const char *buf, uint len)
 {
  /*
   * During drag-selects, we do not process terminal input,
-  * because the user will want the screen to hold still to
-  * be selected.
+  * because the user will want the screen to hold still to be selected.
   */
   if (term_selecting()) {
     if (term.inbuf_pos + len > term.inbuf_size) {
@@ -1447,8 +1461,7 @@ term_write(const char *buf, uint len)
     uchar c = buf[pos++];
 
    /*
-    * If we're printing, add the character to the printer
-    * buffer.
+    * If we're printing, add the character to the printer buffer.
     */
     if (term.printing) {
       if (term.printbuf_pos >= term.printbuf_size) {
@@ -1458,9 +1471,8 @@ term_write(const char *buf, uint len)
       term.printbuf[term.printbuf_pos++] = c;
 
      /*
-      * If we're in print-only mode, we use a much simpler
-      * state machine designed only to recognise the ESC[4i
-      * termination sequence.
+      * If we're in print-only mode, we use a much simpler state machine 
+      * designed only to recognise the ESC[4i termination sequence.
       */
       if (term.only_printing) {
         if (c == '\e')
@@ -1525,7 +1537,7 @@ term_write(const char *buf, uint len)
             int width = xcwidth(combine_surrogates(hwc, wc));
 #endif
             write_char(hwc, width);
-            write_char(wc, 0);
+            write_char(wc, -1);  // -1 indicates low surrogate
           }
           else
             write_error();
@@ -1554,9 +1566,9 @@ term_write(const char *buf, uint len)
 
         // Everything else
         int width;
-        if (cfg.wide_indic && wc >= 0x0900 && indicwide(wc))
+        if (term.wide_indic && wc >= 0x0900 && indicwide(wc))
           width = 2;
-        else if (cfg.wide_extra && wc >= 0x2000 && extrawide(wc)) {
+        else if (term.wide_extra && wc >= 0x2000 && extrawide(wc)) {
           width = 2;
           if (win_char_width(wc) < 2)
             term.curs.attr.attr |= ATTR_EXPAND;

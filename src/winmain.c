@@ -68,6 +68,7 @@ static bool default_size_token = false;
 static bool title_settable = true;
 static string border_style = 0;
 static string report_geom = 0;
+static bool report_moni = false;
 static int monitor = 0;
 static bool center = false;
 static bool right = false;
@@ -79,6 +80,7 @@ static bool maxheight = false;
 static bool store_taskbar_properties = false;
 static bool prevent_pinning = false;
 bool disable_bidi = false;
+bool support_wsl = false;
 
 
 static HBITMAP caretbm;
@@ -108,11 +110,11 @@ static HMODULE
 load_sys_library(string name)
 {
   char path[MAX_PATH];
-  uint len = GetSystemDirectory(path, MAX_PATH);
+  uint len = GetSystemDirectoryA(path, MAX_PATH);
   if (len && len + strlen(name) + 1 < MAX_PATH) {
     path[len] = '\\';
     strcpy(&path[len + 1], name);
-    return LoadLibrary(path);
+    return LoadLibraryA(path);
   }
   else
     return 0;
@@ -376,7 +378,7 @@ get_monitor_info(int moni, MONITORINFO *mip)
   mip->cbSize = sizeof(MONITORINFO);
 
   BOOL CALLBACK
-  monitor_enum (HMONITOR hMonitor, HDC hdcMonitor, LPRECT monp, LPARAM dwData)
+  monitor_enum(HMONITOR hMonitor, HDC hdcMonitor, LPRECT monp, LPARAM dwData)
   {
     (void)hdcMonitor, (void)monp, (void)dwData;
 
@@ -420,6 +422,8 @@ static long current_monitor = 1 - 1;  // assumption for MonitorFromWindow
        stores info of primary monitor
    search_monitors(&x, &y, mon, false/true, 0)
      returns index of given monitor (0/primary if not found)
+   search_monitors(&x, &y, 0, false/true, 0)
+     prints information about all monitors
  */
 int
 search_monitors(int * minx, int * miny, HMONITOR lookup_mon, bool get_primary, MONITORINFO *mip)
@@ -465,6 +469,11 @@ search_monitors(int * minx, int * miny, HMONITOR lookup_mon, bool get_primary, M
   * minx = 0;
   * miny = 0;
   HMONITOR refmon = 0;
+  HMONITOR curmon = lookup_mon ? 0 : MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST);
+  bool print_monitors = !lookup_mon && !mip;
+#ifdef debug_display_monitors
+  print_monitors = !lookup_mon;
+#endif
 
   BOOL CALLBACK
   monitor_enum(HMONITOR hMonitor, HDC hdcMonitor, LPRECT monp, LPARAM dwData)
@@ -494,10 +503,14 @@ search_monitors(int * minx, int * miny, HMONITOR lookup_mon, bool get_primary, M
     if (*miny == 0 || *miny > fr.bottom - fr.top)
       *miny = fr.bottom - fr.top;
 
-#ifdef debug_display_monitors
-    if (!lookup_mon)
-      printf("Monitor %d: %d,%d...%d,%d %s\n", moni, fr.left, fr.top, fr.right, fr.bottom, mi.dwFlags & MONITORINFOF_PRIMARY ? "primary" : "");
-#endif
+    if (print_monitors) {
+      printf("Monitor %d %s %s width,height %4d,%4d (%4d,%4d...%4d,%4d)\n", 
+             moni,
+             hMonitor == curmon ? "current" : "       ",
+             mi.dwFlags & MONITORINFOF_PRIMARY ? "primary" : "       ",
+             (int)(fr.right - fr.left), (int)(fr.bottom - fr.top),
+             (int)fr.left, (int)fr.top, (int)fr.right, (int)fr.bottom);
+    }
 
     return TRUE;
   }
@@ -506,18 +519,20 @@ search_monitors(int * minx, int * miny, HMONITOR lookup_mon, bool get_primary, M
   if (lookup_mon) {
     return moni_found;
   }
-  else {
-    if (!refmon)
+  else if (mip) {
+    if (!refmon)  // not detected primary monitor as requested?
+      // determine current monitor
       refmon = MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST);
     mip->cbSize = sizeof(MONITORINFO);
     GetMonitorInfo(refmon, mip);
     return moni;  // number of monitors
   }
+  else
+    return moni;  // number of monitors printed
 }
 
 /*
- * Minimise or restore the window in response to a server-side
- * request.
+ * Minimise or restore the window in response to a server-side request.
  */
 void
 win_set_iconic(bool iconic)
@@ -903,8 +918,8 @@ win_adjust_borders(int t_width, int t_height)
 #ifdef debug_dpi
     RECT wr0 = cr;
     AdjustWindowRect(&wr0, window_style, false);
-    printf("adjust borders dpi %3d: %ld %ld\n", dpi, (long)wr.right - wr.left, (long)wr.bottom - wr.top);
-    printf("                      : %ld %ld\n", (long)wr0.right - wr0.left, (long)wr0.bottom - wr0.top);
+    printf("adjust borders dpi %3d: %d %d\n", dpi, (int)(wr.right - wr.left), (int)(wr.bottom - wr.top));
+    printf("                      : %d %d\n", (int)(wr0.right - wr0.left), (int)(wr0.bottom - wr0.top));
     print_system_metrics(dpi, "win_adjust_borders");
 #endif
   }
@@ -1157,21 +1172,24 @@ confirm_exit(void)
   if (!child_is_parent())
     return true;
 
-  /* retrieve list of child processes */
-  char * pscmd = "/bin/procps -o pid,ruser=USER -o comm -t %s 2> /dev/null || /bin/ps -ef";
+  /* command to retrieve list of child processes */
+  //procps is ASCII-limited
+  //char * pscmd = "LC_ALL=C.UTF-8 /bin/procps -o pid,ruser=USER -o comm -t %s 2> /dev/null || LC_ALL=C.UTF-8 /bin/ps -ef";
+  //char * pscmd = "LC_ALL=C.UTF-8 /bin/ps -ef";
+  char * pscmd = "LC_ALL=C.UTF-8 /bin/ps -es | sed -e 's,  *,	&,g' | cut -f 2,3,5-99 | tr -d '	'";
   char * tty = child_tty();
   if (strrchr(tty, '/'))
     tty = strrchr(tty, '/') + 1;
   char cmd[strlen(pscmd) + strlen(tty) + 1];
   sprintf(cmd, pscmd, tty, tty);
   FILE * procps = popen(cmd, "r");
-  char * msg_pre = "Processes are running in session:\n";
-  char * msg_post = "Close anyway?";
-  char * msg = malloc(strlen(msg_pre) + 1);
-  strcpy(msg, msg_pre);
+
+  int cmdpos = 0;
+  char * msg = newn(char, 1);
+  strcpy(msg, "");
   if (procps) {
     int ll = 999;  // use very long input despite narrow msg box
-                   // to avoid high risk of clipping within UTF-8 
+                   // to avoid high risk of clipping within multi-byte char
                    // and failing the wide character transformation
     char line[ll]; // heap-allocated to prevent #530
     bool first = true;
@@ -1184,38 +1202,57 @@ confirm_exit(void)
           if (strstr(line, "TTY")) {
             filter_tty = true;
           }
+          char * cmd = strstr(line, " COMMAND");
+          if (!cmd)
+            cmd = strstr(line, " CMD");
+          if (cmd)
+            cmdpos = cmd + 1 - line;
           first = false;
         }
-        msg = realloc(msg, strlen(msg) + strlen(line) + 2);
+        msg = renewn(msg, strlen(msg) + strlen(line) + 4);
+        strcat(msg, "|");  // cmdpos += strlen(prefix) outside loop!
         strcat(msg, line);
         strcat(msg, "\n");
       }
     }
     pclose(procps);
   }
-  msg = realloc(msg, strlen(msg) + strlen(msg_post) + 1);
-  strcat(msg, msg_post);
+  cmdpos += 1;
+  wchar * proclist = cs__utftowcs(msg);
+  int cpos = 0;
+  for (uint i = 0; i < wcslen(proclist); i++) {
+    if (cpos == 0) {
+      if (proclist[i] == '|') {
+        proclist[i] = 0x254E;  // │┃┆┇┊┋┠╎╏║╟
+        cpos = 1;
+      }
+      else
+        cpos = -1;
+    }
+    if (cpos > 0 && (!cmdpos || cpos <= cmdpos) && proclist[i] == ' ')
+      proclist[i] = 0x2007;
+    if (proclist[i] == '\n')
+      cpos = 0;
+    else
+      cpos ++;
+  }
 
-  size_t size = cs_mbstowcs(0, msg, 0) + 1;
-  int ret;
-  if (size) {
-    wchar msgw[size];
-    cs_mbstowcs(msgw, msg, size);
-    wchar appn[strlen(APPNAME) + 1];
-    cs_mbstowcs(appn, APPNAME, lengthof(appn));
-    ret =
-      MessageBoxW(
-        wnd, msgw,
-        appn, MB_ICONWARNING | MB_OKCANCEL | MB_DEFBUTTON2
-      );
-  }
-  else {
-    ret =
-      MessageBox(
-        wnd, msg,
-        APPNAME, MB_ICONWARNING | MB_OKCANCEL | MB_DEFBUTTON2
-      );
-  }
+  wchar * msg_pre = _W("Processes are running in session:");
+  wchar * msg_post = _W("Close anyway?");
+
+  wchar * wmsg = newn(wchar, wcslen(msg_pre) + wcslen(proclist) + wcslen(msg_post) + 2);
+  wcscpy(wmsg, msg_pre);
+  wcscat(wmsg, W("\n"));
+  wcscat(wmsg, proclist);
+  wcscat(wmsg, msg_post);
+  free(proclist);
+
+  int ret = message_box_w(
+              wnd, wmsg,
+              W(APPNAME), MB_ICONWARNING | MB_OKCANCEL | MB_DEFBUTTON2,
+              null
+            );
+  free(wmsg);
 
   // Treat failure to show the dialog as confirmation.
   return !ret || ret == IDOK;
@@ -1643,56 +1680,112 @@ static struct {
 }
 
 
-static void
-show_msg(FILE *stream, string msg)
+void
+show_message(char * msg, UINT type)
 {
-  if (fputs(msg, stream) < 0 || fputs("\n", stream) < 0 || fflush(stream) < 0)
-    MessageBox(0, msg, APPNAME, MB_OK);
+  FILE * out = (type & (MB_ICONWARNING | MB_ICONSTOP)) ? stderr : stdout;
+  char * outmsg = cs__utftombs(msg);
+  if (fputs(outmsg, out) < 0 || fputs("\n", out) < 0 || fflush(out) < 0) {
+    wchar * wmsg = cs__utftowcs(msg);
+    message_box_w(0, wmsg, W(APPNAME), type, null);
+    delete(wmsg);
+  }
+  delete(outmsg);
 }
 
 static void
-show_msg_w(FILE *stream, wstring msg)
+show_info(char * msg)
 {
-  if (fprintf(stream, "%ls", msg) < 0 || fputs("\n", stream) < 0 || fflush(stream) < 0)
-    MessageBoxW(0, msg, W(APPNAME), MB_OK);
+  show_message(msg, MB_OK);
 }
 
-static no_return __attribute__((format(printf, 1, 2)))
-error(char *format, ...)
+static char *
+opterror_msg(string msg, bool utf8params, string p1, string p2)
 {
-  char *msg;
-  va_list va;
-  va_start(va, format);
-  vasprintf(&msg, format, va);
-  va_end(va);
-  msg = asform("%s: %s\nTry '--help' for more information.\n",
-               main_argv[0], msg);
-  show_msg(stderr, msg);
+  // Note: msg is in UTF-8,
+  // parameters are in current encoding unless utf8params is true
+  if (!utf8params) {
+    if (p1) {
+      wchar * w = cs__mbstowcs(p1);
+      p1 = cs__wcstoutf(w);
+      free(w);
+    }
+    if (p2) {
+      wchar * w = cs__mbstowcs(p2);
+      p2 = cs__wcstoutf(w);
+      free(w);
+    }
+  }
+
+  char * fullmsg;
+  int len = asprintf(&fullmsg, msg, p1, p2);
+  if (!utf8params) {
+    if (p1)
+      free((char *)p1);
+    if (p2)
+      free((char *)p2);
+  }
+
+  if (len > 0)
+    return fullmsg;
+  else
+    return null;
+}
+
+bool
+print_opterror(FILE * stream, string msg, bool utf8params, string p1, string p2)
+{
+  char * fullmsg = opterror_msg(msg, utf8params, p1, p2);
+  bool ok = false;
+  if (fullmsg) {
+    char * outmsg = cs__utftombs(fullmsg);
+    delete(fullmsg);
+    ok = fprintf(stream, "%s.\n", outmsg);
+    if (ok)
+      ok = fflush(stream);
+    delete(outmsg);
+  }
+  return ok;
+}
+
+static void
+print_error(string msg)
+{
+  print_opterror(stderr, msg, true, "", "");
+}
+
+static void
+option_error(char * msg, char * option)
+{
+  // msg is in UTF-8, option is in current encoding
+  char * optmsg = opterror_msg(msg, false, option, null);
+  char * fullmsg = asform("%s\n%s", optmsg, _("Try '--help' for more information"));
+  show_message(fullmsg, MB_ICONWARNING);
   exit(1);
 }
 
 static void
-warnw(wstring msg, wstring file, wstring err)
+show_iconwarn(wchar * winmsg)
 {
-#if CYGWIN_VERSION_API_MINOR >= 201
-  wstring format = (err && *err) ? W("%s: %ls '%ls':\n%ls") : W("%s: %ls '%ls'");
-  wchar mess[wcslen(format) + strlen(main_argv[0]) + wcslen(msg) + wcslen(file) + (err ? wcslen(err) : 0)];
-  swprintf(mess, lengthof(mess), format, main_argv[0], msg, file, err);
-  show_msg_w(stderr, mess);
-#else
-  //MinGW
-  (void)show_msg_w;
-  string format = (err && *err) ? "%s: %s '%s':\n%s" : "%s: %s '%s'";
-  char * _msg = cs__wcstombs(msg);
-  char * _file = cs__wcstombs(file);
-  char * _err = cs__wcstombs(err);
-  char mess[strlen(format) + strlen(main_argv[0]) + strlen(_msg) + strlen(_file) + (err ? strlen(_err) : 0)];
-  sprintf(mess, format, main_argv[0], _msg, _file, _err);
-  free(_msg);
-  free(_file);
-  free(_err);
-  show_msg(stderr, mess);
-#endif
+  char * msg = _("Could not load icon");
+  char * in = cs__wcstoutf(cfg.icon);
+
+  char * fullmsg;
+  int len;
+  if (winmsg) {
+    char * wmsg = cs__wcstoutf(winmsg);
+    len = asprintf(&fullmsg, "%s '%s':\n%s", msg, in, wmsg);
+    free(wmsg);
+  }
+  else
+    len = asprintf(&fullmsg, "%s '%s'", msg, in);
+  free(in);
+  if (len > 0) {
+    show_message(fullmsg, MB_ICONWARNING);
+    free(fullmsg);
+  }
+  else
+    show_message(msg, MB_ICONWARNING);
 }
 
 void
@@ -1978,10 +2071,11 @@ DEFINE_PROPERTYKEY(PKEY_AppUserModel_StartPinOption, 0x9f4c2855,0x9f79,0x4B39,0x
 #endif
 }
 
-static const char help[] =
-  "Usage: " APPNAME " [OPTION]... [ PROGRAM [ARG]... | - ]\n"
-  "\n"
-  "Start a new terminal session running the specified program or the user's shell.\n"
+#define usage __("Usage:")
+#define synopsis __("[OPTION]... [ PROGRAM [ARG]... | - ]")
+static char help[] =
+  //__ help text (output of -H / --help), after initial line ("synopsis")
+  __("Start a new terminal session running the specified program or the user's shell.\n"
   "If a dash is given instead of a program, invoke the shell as a login shell.\n"
   "\n"
   "Options:\n"
@@ -2007,7 +2101,7 @@ static const char help[] =
   "  -H, --help            Display help and exit\n"
   "  -V, --version         Print version information and exit\n"
   "See manual page for further command line options and configuration.\n"
-;
+);
 
 static const char short_opts[] = "+:c:C:eh:i:l:o:p:s:t:T:B:R:uw:HVdD";
 
@@ -2026,12 +2120,14 @@ opts[] = {
   {"title",      required_argument, 0, 't'},
   {"Title",      required_argument, 0, 'T'},
   {"Border",     required_argument, 0, 'B'},
-  {"Reportpos",  required_argument, 0, 'R'},
+  {"Report",     required_argument, 0, 'R'},
+  {"Reportpos",  required_argument, 0, 'R'},  // compatibility variant
   {"window",     required_argument, 0, 'w'},
   {"class",      required_argument, 0, ''},  // short option not enabled
   {"dir",        required_argument, 0, ''},  // short option not enabled
   {"nobidi",     no_argument,       0, ''},  // short option not enabled
   {"nortl",      no_argument,       0, ''},  // short option not enabled
+  {"wsl",        no_argument,       0, ''},  // short option not enabled
   {"help",       no_argument,       0, 'H'},
   {"version",    no_argument,       0, 'V'},
   {"nodaemon",   no_argument,       0, 'd'},
@@ -2051,7 +2147,7 @@ main(int argc, char *argv[])
   {
     char timbuf [22];
     struct timeval now;
-    gettimeofday (& now, 0);
+    gettimeofday(& now, 0);
     strftime(timbuf, sizeof (timbuf), "%Y-%m-%d %H:%M:%S", localtime(& now.tv_sec));
     fprintf(mtlog, "[%s.%03d] %s\n", timbuf, (int)now.tv_usec / 1000, argv[0]);
     fflush(mtlog);
@@ -2153,7 +2249,7 @@ main(int argc, char *argv[])
         else if (sscanf(optarg, "%i,%i%1s", &cfg.x, &cfg.y, (char[2]){}) == 2)
           ;
         else
-          error("syntax error in position argument '%s'", optarg);
+          option_error(_("Syntax error in position argument '%s'"), optarg);
       when 's':
         if (strcmp(optarg, "maxwidth") == 0)
           maxwidth = true;
@@ -2164,7 +2260,7 @@ main(int argc, char *argv[])
         else if (sscanf(optarg, "%ux%u%1s", &cfg.cols, &cfg.rows, (char[2]){}) == 2)
           ;
         else
-          error("syntax error in size argument '%s'", optarg);
+          option_error(_("Syntax error in size argument '%s'"), optarg);
       when 't': set_arg_option("Title", optarg);
       when 'T':
         set_arg_option("Title", optarg);
@@ -2172,7 +2268,12 @@ main(int argc, char *argv[])
       when 'B':
         border_style = strdup(optarg);
       when 'R':
-        report_geom = strdup(optarg);
+        switch (*optarg) {
+          when 'm':
+            report_moni = true;
+          when 's' or 'o':
+            report_geom = strdup(optarg);
+        }
       when 'u': cfg.create_utmp = true;
       when '':
         prevent_pinning = true;
@@ -2181,6 +2282,7 @@ main(int argc, char *argv[])
       when 'w': set_arg_option("Window", optarg);
       when '': set_arg_option("Class", optarg);
       when '': disable_bidi = true;
+      when '': support_wsl = true;
       when '':
         if (chdir(optarg) < 0) {
           if (*optarg == '"' || *optarg == '\'')
@@ -2197,17 +2299,25 @@ main(int argc, char *argv[])
         cfg.daemonize = false;
       when 'D':
         cfg.daemonize_always = true;
-      when 'H':
-        show_msg(stdout, help);
+      when 'H': {
+        char * helptext = asform("%s %s %s\n\n%s", _(usage), APPNAME, _(synopsis), _(help));
+        show_info(helptext);
+        free(helptext);
         return 0;
-      when 'V':
-        show_msg(stdout, VERSION_TEXT);
+      }
+      when 'V': {
+        char * vertext =
+          asform("%s\n%s\n%s\n%s\n", 
+                 VERSION_TEXT, COPYRIGHT, LICENSE_TEXT, _(WARRANTY_TEXT));
+        show_info(vertext);
+        free(vertext);
         return 0;
+      }
       when '?':
-        error("unknown option '%s'", optopt ? shortopt : longopt);
+        option_error(_("Unknown option '%s'"), optopt ? shortopt : longopt);
       when ':':
-        error("option '%s' requires an argument",
-              longopt[1] == '-' ? longopt : shortopt);
+        option_error(_("Option '%s' requires an argument"),
+                     longopt[1] == '-' ? longopt : shortopt);
     }
   }
   copy_config("main after -o", &file_cfg, &cfg);
@@ -2252,7 +2362,7 @@ main(int argc, char *argv[])
   if (daemonize) {  // detach from parent process and terminal
     pid_t pid = fork();
     if (pid < 0)
-      fprintf(stderr, "Mintty could not detach from caller, starting anyway.\n");
+      print_error(_("Mintty could not detach from caller, starting anyway"));
     if (pid > 0)
       exit(0);  // exit parent process
 
@@ -2345,10 +2455,10 @@ main(int argc, char *argv[])
           FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_MAX_WIDTH_MASK,
           0, err, 0, winmsg, wmlen, 0
         );
-        warnw(_W("could not load icon file"), cfg.icon, winmsg);
+        show_iconwarn(winmsg);
       }
       else
-        warnw(_W("could not load icon file"), cfg.icon, W(""));
+        show_iconwarn(null);
     }
     delete(icon_file);
   }
@@ -2385,7 +2495,7 @@ main(int argc, char *argv[])
       wtitle = buf;
     }
     else {
-      fputs("Using default title due to invalid characters in program name.\n", stderr);
+      print_error(_("Using default title due to invalid characters in program name"));
       wtitle = W(APPNAME);
     }
   }
@@ -2437,7 +2547,7 @@ main(int argc, char *argv[])
 
 #define dont_debug_position
 #ifdef debug_position
-#define printpos(tag, x, y, mon)	printf("%s %d %d (%ld %ld %ld %ld)\n", tag, x, y, mon.left, mon.top, mon.right, mon.bottom);
+#define printpos(tag, x, y, mon)	printf("%s %d %d (%d %d %d %d)\n", tag, x, y, (int)mon.left, (int)mon.top, (int)mon.right, (int)mon.bottom);
 #else
 #define printpos(tag, x, y, mon)
 #endif
@@ -2602,6 +2712,18 @@ main(int argc, char *argv[])
   win_init_menus();
   update_transparency();
 
+#ifdef debug_display_monitors_mockup
+#define report_moni true
+#endif
+  if (report_moni) {
+    int x, y;
+    int n = search_monitors(&x, &y, 0, false, 0);
+    printf("%d monitors,      smallest width,height %4d,%4d\n", n, x, y);
+#ifndef debug_display_monitors_mockup
+    exit(0);
+#endif
+  }
+
   // Create child process.
   child_create(
     argv, &(struct winsize){term_rows, term_cols, term_width, term_height}
@@ -2611,21 +2733,6 @@ main(int argc, char *argv[])
   go_fullscr_on_max = (cfg.window == -1);
   ShowWindow(wnd, go_fullscr_on_max ? SW_SHOWMAXIMIZED : cfg.window);
   SetFocus(wnd);
-
-#ifdef debug_display_monitors_mockup
-  {
-    int x, y;
-    MONITORINFO mi;
-    int n = search_monitors(&x, &y, 0, false, &mi);
-    printf("%d monitors, smallest %dx%d, current %d,%d...%d,%d\n", n, x, y, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom);
-    n = search_monitors(&x, &y, 0, true, &mi);
-    printf("%d monitors, smallest %dx%d, primary %d,%d...%d,%d\n", n, x, y, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom);
-    n = search_monitors(&x, &y, (HMONITOR)(current_monitor + 1), false, 0);
-    printf("current monitor: %d\n", n);
-    n = search_monitors(&x, &y, (HMONITOR)(primary_monitor + 1), false, 0);
-    printf("primary monitor: %d\n", n);
-  }
-#endif
 
   // Message loop.
   for (;;) {

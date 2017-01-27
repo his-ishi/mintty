@@ -22,7 +22,7 @@ extern void win_reconfig(void);
 extern void win_update(void);
 extern void win_schedule_update(void);
 
-extern void win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl);
+extern void win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int lattr, bool has_rtl);
 extern void win_update_mouse(void);
 extern void win_capture_mouse(void);
 extern void win_bell(config *);
@@ -68,9 +68,12 @@ extern void win_paste(void);
 
 extern void win_set_timer(void_fn cb, uint ticks);
 
+extern bool print_opterror(FILE * stream, string msg, bool utf8params, string p1, string p2);
 extern void win_show_about(void);
-extern void win_show_error(wchar *);
-extern void win_show_warning(wchar *);
+extern void win_show_error(char * msg);
+extern void win_show_warning(char * msg);
+extern int message_box(HWND parwnd, char * wtext, char * wcaption, int type, wstring ok);
+extern int message_box_w(HWND parwnd, wchar * wtext, wchar * wcaption, int type, wstring ok);
 
 extern bool win_is_glass_available(void);
 

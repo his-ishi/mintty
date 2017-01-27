@@ -63,7 +63,7 @@ get(struct buf *b)
  * Add a combining character to a character cell.
  */
 void
-add_cc(termline *line, int col, wchar chr)
+add_cc(termline *line, int col, wchar chr, cattr attr)
 {
   assert(col >= 0 && col < line->cols);
 
@@ -98,6 +98,7 @@ add_cc(termline *line, int col, wchar chr)
     line->cc_free = 0;
   line->chars[newcc].cc_next = 0;
   line->chars[newcc].chr = chr;
+  line->chars[newcc].attr = attr;
   line->chars[col].cc_next = newcc - col;
 }
 
@@ -174,7 +175,7 @@ copy_termchar(termline *destline, int x, termchar *src)
 
   while (src->cc_next) {
     src += src->cc_next;
-    add_cc(destline, x, src->chr);
+    add_cc(destline, x, src->chr, src->attr);
   }
 }
 
@@ -377,7 +378,7 @@ readliteral_cc(struct buf *b, termchar *c, termline *line)
     readliteral_chr(b, &n, line);
     if (!n.chr)
       break;
-    add_cc(line, x, n.chr);
+    add_cc(line, x, n.chr, n.attr);
   }
 }
 
@@ -842,8 +843,8 @@ term_bidi_cache_store(int line, termchar *lbefore, termchar *lafter,
 
   memcpy(term.pre_bidi_cache[line].chars, lbefore, size * sizeof(termchar));
   memcpy(term.post_bidi_cache[line].chars, lafter, size * sizeof(termchar));
-  memset(term.post_bidi_cache[line].forward, 0, width * sizeof (int));
-  memset(term.post_bidi_cache[line].backward, 0, width * sizeof (int));
+  memset(term.post_bidi_cache[line].forward, 0, width * sizeof(int));
+  memset(term.post_bidi_cache[line].backward, 0, width * sizeof(int));
 
   for (i = 0; i < width; i++) {
     int p = wcTo[i].index;

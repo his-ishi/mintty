@@ -14,6 +14,7 @@
 #define _OLE2_H
 #include <commdlg.h>
 
+
 /*
  * winctrls.c: routines to self-manage the controls in a dialog box.
  */
@@ -46,7 +47,7 @@
 
 void
 ctrlposinit(ctrlpos * cp, HWND wnd, int leftborder, int rightborder,
-           int topborder)
+            int topborder)
 {
   RECT r, r2;
   cp->wnd = wnd;
@@ -66,8 +67,8 @@ ctrlposinit(ctrlpos * cp, HWND wnd, int leftborder, int rightborder,
 static HWND
 doctl(control * ctrl, 
       ctrlpos * cp, RECT r, 
-      char * wclass, int wstyle, int exstyle, 
-      string wtext, int wid)
+      char * class, int wstyle, int exstyle, 
+      string text, int wid)
 {
   HWND ctl;
  /*
@@ -84,11 +85,27 @@ doctl(control * ctrl,
   * without creating any actual controls.
   */
   if (cp->wnd) {
-    ctl =
-      CreateWindowEx(exstyle, wclass, wtext, wstyle, r.left, r.top, r.right,
-                     r.bottom, cp->wnd, (HMENU)(INT_PTR)wid, inst, null);
+    // avoid changing text with SendMessageW(ctl, WM_SETTEXT, ...) 
+    // as this produces large text artefacts
+    if (nonascii(text)) {
+      // transform label for proper Windows display
+      wchar * wtext = text ? cs__utftowcs(text) : 0;
+      wchar * wclass = class ? cs__utftowcs(class) : 0;
+      ctl =
+        CreateWindowExW(exstyle, wclass, wtext, wstyle, r.left, r.top, r.right,
+                        r.bottom, cp->wnd, (HMENU)(INT_PTR)wid, inst, null);
+      if (wtext)
+        free(wtext);
+      if (wclass)
+        free(wclass);
+    }
+    else {
+      ctl =
+        CreateWindowExA(exstyle, class, text, wstyle, r.left, r.top, r.right,
+                        r.bottom, cp->wnd, (HMENU)(INT_PTR)wid, inst, null);
+    }
 #ifdef debug_widgets
-    printf("%8p %s %d '%s'\n", ctl, wclass, exstyle, wtext);
+    printf("%8p %s %d '%s'\n", ctl, class, exstyle, text);
 #endif
     SendMessage(ctl, WM_SETFONT, cp->font, MAKELPARAM(true, 0));
     if (ctrl) {
@@ -109,7 +126,7 @@ doctl(control * ctrl,
     EnumChildWindows(ctl, enumwin, 0);
 #endif
 
-    if (!strcmp(wclass, "LISTBOX")) {
+    if (!strcmp(class, "LISTBOX")) {
      /*
       * Bizarre Windows bug: the list box calculates its
       * number of lines based on the font it has at creation
@@ -346,18 +363,14 @@ button(control * ctrl, ctrlpos * cp, char *btext, int bid, int defbtn)
   if (defbtn && cp->wnd)
     SendMessage(cp->wnd, DM_SETDEFID, bid, 0);
 
-  HWND but = 
-    doctl(ctrl, cp, r, "BUTTON",
+  //HWND but = // if we'd want to send it a message right away
+  doctl(ctrl, cp, r, "BUTTON",
           BS_NOTIFY | WS_CHILD | WS_VISIBLE | WS_TABSTOP |
           (defbtn ? BS_DEFPUSHBUTTON : 0) | BS_PUSHBUTTON, 0, btext, bid);
-  // this is a special hack until a generic solution is crafted 
-  // for Unicode labels and maybe other fancy stuff
-  if (!strcmp(btext, "&Play")) {
-    SendMessageW(but, WM_SETTEXT, 0, (LPARAM)_W("► &Play"));
-  }
 #ifdef need_to_disable_widgets_here
-  // another hack to disable a widget initially
-  if (!strcmp(btext, "Store")) {
+  // disabled prototype hack to disable a widget initially;
+  // now achieved by enable_widget() in config.c
+  if (!strcmp(btext, _("Store"))) {
     EnableWindow(but, FALSE);
   }
 #endif
@@ -410,8 +423,7 @@ staticpassedit(ctrlpos * cp, char *stext, int sid, int eid, int percentedit)
 }
 
 /*
- * A drop-down list box on the right hand side, with a static to
- * its left.
+ * A drop-down list box on the right hand side, with a static to its left.
  */
 static void
 staticddl(ctrlpos * cp, char *stext, int sid, int lid, int percentlist)
@@ -599,8 +611,11 @@ winctrl_layout(winctrls *wc, ctrlpos *cp, controlset *s, int *id)
 
   base_id = *id;
 
+#ifdef debug_layout
+  printf("winctrl_layout cols %d nctl %d titl %s path %s\n", s->ncolumns, s->ncontrols, s->boxtitle, s->pathname);
+#endif
   if (!s->ncolumns) {
-   /* Draw a title. */
+   /* Draw a title of an Options dialog panel. */
     winctrl *c = new_winctrl(base_id, strdup(s->boxtitle));
     winctrl_add(wc, c);
     paneltitle(cp, base_id);
@@ -785,7 +800,8 @@ winctrl_layout(winctrls *wc, ctrlpos *cp, controlset *s, int *id)
       }
       when CTRL_FONTSELECT: {
         num_ids = 3;
-        staticbtn(&pos, "", base_id + 1, "&Select...", base_id + 2);
+        //__ Options - Text: font chooser activation button
+        staticbtn(&pos, "", base_id + 1, _("&Select..."), base_id + 2);
         data = new(font_spec);
       }
       otherwise:
@@ -842,6 +858,215 @@ winctrl_set_focus(control *ctrl, int has_focus)
     dlg.focused = null;
 }
 
+static HWND font_sample = 0;
+
+/*
+   adapted from messageboxmanager.zip
+   @ https://www.codeproject.com/articles/18399/localizing-system-messagebox
+ */
+static LRESULT CALLBACK
+set_labels(int nCode, WPARAM wParam, LPARAM lParam) {
+  bool localize = *cfg.lang;
+
+#define dont_debug_dialog_hook
+
+#ifdef debug_dialog_hook
+  void
+  trace_label(int id, HWND button, wstring label)
+  {
+    if (!button) button = GetDlgItem((HWND)wParam, id);
+    wchar buf [99];
+    GetWindowTextW(button, buf, 99);
+    printf("%d <%ls> -> <%ls>\n", id, buf, label);
+  }
+#endif
+
+  void setlabel(int id, wstring label) {
+    HWND button = GetDlgItem((HWND)wParam, id);
+    if (localize && button) {
+#ifdef debug_dialog_hook
+      trace_label(id, button, label);
+#endif
+      SetWindowTextW(button, label);
+    }
+  }
+
+#ifdef debug_dialog_hook
+  char * hcbt[] = {
+    "HCBT_MOVESIZE",
+    "HCBT_MINMAX",
+    "HCBT_QS",
+    "HCBT_CREATEWND",
+    "HCBT_DESTROYWND",
+    "HCBT_ACTIVATE",
+    "HCBT_CLICKSKIPPED",
+    "HCBT_KEYSKIPPED",
+    "HCBT_SYSCOMMAND",
+    "HCBT_SETFOCUS",
+  };
+  char * sCode = "?";
+  if (nCode >= 0 && nCode < (int)lengthof(hcbt))
+    sCode = hcbt[nCode];
+  printf("hook %lld: %d %s\n", wParam, nCode, sCode);
+#endif
+
+  // we could adjust window size if (nCode == HCBT_CREATEWND)
+  // but then the translations below would not work anymore, 
+  // because SetWindowPos would cause HCBT_ACTIVATE to be invoked 
+  // when the dialog is not yet populated with the other dialog items
+  if (nCode == HCBT_ACTIVATE) {
+    setlabel(IDOK, _W("OK"));
+    setlabel(IDCANCEL, _W("Cancel"));
+
+    if (localize && GetDlgItem((HWND)wParam, 1088))
+      //__ Font chooser: title bar label
+      SetWindowTextW((HWND)wParam, _W("Font "));
+    //__ Font chooser: button
+    setlabel(1026, _W("&Apply"));
+    //__ Font chooser:
+    setlabel(1088, _W("&Font:"));
+    //__ Font chooser:
+    setlabel(1089, _W("Font st&yle:"));
+    //__ Font chooser:
+    setlabel(1090, _W("&Size:"));
+    //__ Font chooser:
+    setlabel(1073, _W("Sample"));
+    //__ Font chooser: text sample ("AaBbYyZz" by default)
+    setlabel(1092, _W("Ferqœm’4€"));
+    font_sample = GetDlgItem((HWND)wParam, 1092);
+    // if we manage to get the field longer, 
+    // sample text could be picked from http://clagnut.com/blog/2380/,
+    // e.g. "Cwm fjord bank glyphs vext quiz"
+
+    HWND weg = 0;
+    if (!new_cfg.old_fontmenu) {
+      // remove "Script:" junk:
+      weg = GetDlgItem((HWND)wParam, 1094);
+      if (weg)
+        DestroyWindow(weg);
+      weg = GetDlgItem((HWND)wParam, 1140);
+      if (weg)
+        DestroyWindow(weg);
+    }
+    else {
+      //__ Font chooser: this field is only shown with OldFontMenu=true
+      setlabel(1094, _W("Sc&ript:"));
+      //__ Font chooser: this field is only shown with OldFontMenu=true
+      setlabel(1592, _W("<A>Show more fonts</A>"));
+    }
+
+    if (localize && GetDlgItem((HWND)wParam, 730))
+      //__ Colour chooser: title bar label
+      SetWindowTextW((HWND)wParam, _W("Colour "));
+    // tricky way to adjust "Basic colors:" and "Custom colors:" labels 
+    // which insanely have the same dialog item ID, see
+    // http://www.xtremevbtalk.com/api/181863-changing-custom-color-label-choosecolor-dialog-comdlg32-dll.html
+    HWND custom_colors = GetDlgItem((HWND)wParam, 65535);
+    if (custom_colors) {
+#ifdef debug_dialog_hook
+      trace_label(65535, custom_colors, _W("B&asic colours:"));
+#endif
+      LRESULT fnt = SendMessage(custom_colors, WM_GETFONT, 0, 0);
+      DestroyWindow(custom_colors);
+      //__ Colour chooser:
+      custom_colors = CreateWindowExW(4, W("Static"), _W("B&asic colours:"), 0x50020000, 6, 7, 210, 15, (HWND)wParam, 0, inst, 0);
+                      //shortkey disambiguated from original "&Basic colors:"
+      SendMessage(custom_colors, WM_SETFONT, fnt, MAKELPARAM(true, 0));
+      //__ Colour chooser:
+      setlabel(65535, _W("&Custom colours:"));
+    }
+    //__ Colour chooser:
+    setlabel(719, _W("De&fine Custom Colours >>"));
+          //shortkey disambiguated from original "&Define Custom Colours >>"
+    //__ Colour chooser:
+    setlabel(730, _W("Colour"));
+    //__ Colour chooser:
+    setlabel(731, _W("|S&olid"));
+    //__ Colour chooser:
+    setlabel(723, _W("&Hue:"));
+            //shortkey disambiguated from original "Hu&e:"
+    //__ Colour chooser:
+    setlabel(724, _W("&Sat:"));
+    //__ Colour chooser:
+    setlabel(725, _W("&Lum:"));
+    //__ Colour chooser:
+    setlabel(726, _W("&Red:"));
+    //__ Colour chooser:
+    setlabel(727, _W("&Green:"));
+    //__ Colour chooser:
+    setlabel(728, _W("&Blue:"));
+            //shortkey disambiguated from original "Bl&ue:"
+    //__ Colour chooser:
+    setlabel(712, _W("A&dd to Custom Colours"));
+            //shortkey disambiguated from original "&Add to Custom Colours"
+
+#ifdef debug_dialog_hook
+    for (int id = 12; id < 65536; id++) {
+      HWND dlg = GetDlgItem((HWND)wParam, id);
+      if (dlg) {
+        wchar buf [99];
+        RECT r;
+        GetWindowRect(dlg, &r);
+        printf("dlgitem %d: %4d %4d %4d %4d / ", id, r.left, r.top, r.right, r.bottom);
+        GetClientRect(dlg, &r);
+        printf("%d %d %3d %3d ", r.left, r.top, r.right, r.bottom);
+        GetWindowTextW(dlg, buf, 99);
+        printf("<%ls>\n", buf);
+      }
+    }
+#endif
+
+#define dont_adjust_text_sample
+
+#ifdef adjust_text_sample
+    // resize frame around sample, try to resize text sample (failed)
+    HWND sample = GetDlgItem((HWND)wParam, 1073);
+    if (!new_cfg.old_fontmenu && weg && sample) {
+#define delta 154
+      // adjust label "Sample" and frame
+      RECT wr;
+      GetWindowRect(sample, &wr);
+      RECT cr;
+      GetClientRect(sample, &cr);
+#ifdef debug_dialog_hook
+      printf(" Sample: %4d %4d %4d %4d / %d %d %3d %3d\n", wr.left, wr.top, wr.right, wr.bottom, cr.left, cr.top, cr.right, cr.bottom);
+#endif
+      SetWindowPos(sample, null, 168 - delta, 158, 171 + delta, 70,
+                   SWP_NOACTIVATE | SWP_NOZORDER);
+
+      // try to adjust sample text;
+      // we can move/resize the labelled frame,
+      // so why can't we adjust the sample text?
+      sample = GetDlgItem((HWND)wParam, 1092);
+
+      GetWindowRect(sample, &wr);
+      GetClientRect(sample, &cr);
+#ifdef debug_dialog_hook
+      printf(" sample: %4d %4d %4d %4d / %d %d %3d %3d\n", wr.left, wr.top, wr.right, wr.bottom, cr.left, cr.top, cr.right, cr.bottom);
+#endif
+      SetWindowPos(sample, null, 12, 185, 171 + delta, 37,
+                   SWP_NOACTIVATE | SWP_NOZORDER);
+    }
+#endif
+
+    // crop dialog size after removing useless stuff
+    if (!new_cfg.old_fontmenu && weg && GetDlgItem((HWND)wParam, 1092)) {
+      RECT wr;
+      GetWindowRect((HWND)wParam, &wr);
+#ifdef debug_dialog_hook
+      RECT cr;
+      GetClientRect((HWND)wParam, &cr);
+      printf("Chooser: %4d %4d %4d %4d / %d %d %3d %3d\n", wr.left, wr.top, wr.right, wr.bottom, cr.left, cr.top, cr.right, cr.bottom);
+#endif
+      SetWindowPos((HWND)wParam, null, 0, 0,
+                   wr.right - wr.left, wr.bottom - wr.top - 74,
+                   SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOMOVE | SWP_NOZORDER);
+    }
+  }
+
+  return CallNextHookEx(0, nCode, wParam, lParam);
+}
+
 #ifndef CF_INACTIVEFONTS
 # ifdef __MSABI_LONG
 #define CF_INACTIVEFONTS __MSABI_LONG (0x02000000)
@@ -857,6 +1082,97 @@ winctrl_set_focus(control *ctrl, int has_focus)
 #else
 #define trace_fontsel(params)	
 #endif
+
+static winctrl * font_ctrl;
+
+#define dont_debug_messages
+
+static UINT_PTR CALLBACK
+fonthook(HWND hdlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  (void)lParam;
+#ifdef debug_messages
+#include <time.h>
+  static struct {
+  uint wm_;
+  char * wm_name;
+  } wm_names[] = {
+#  include "_wm.t"
+  };
+  char * wm_name = "WM_?";
+  if ((msg != WM_SETCURSOR && msg != WM_NCHITTEST && msg != WM_MOUSEFIRST
+       && msg != WM_ERASEBKGND && msg != WM_CTLCOLORDLG && msg != WM_PRINTCLIENT && msg != WM_CTLCOLORBTN
+       && msg != WM_ENTERIDLE
+       && (msg != WM_NOTIFY)
+     )) {
+    for (uint i = 0; i < lengthof(wm_names); i++)
+      if (msg == wm_names[i].wm_) {
+        wm_name = wm_names[i].wm_name;
+        break;
+      }
+    printf("[%d] fonthook %04X %s (%04X %08X)\n", (int)time(0), msg, wm_name, (unsigned)wParam, (unsigned)lParam);
+  }
+#endif
+
+  if (msg == WM_DRAWITEM) {
+    // restore our own font sample text
+#define disp ((DRAWITEMSTRUCT*)lParam)
+#ifdef debug_messages
+    printf("                           %04X %d %2d %04X %04X %p\n",
+           disp->CtlType, disp->CtlID, disp->itemID, disp->itemAction, disp->itemState, 
+           disp->hwndItem);
+#endif
+    if (disp->CtlID == 1137 && (disp->itemAction == ODA_SELECT))
+      // or any of CtlID=1137 (font style)/itemID=0...
+      // or CtlID=1138 (font size)/itemID=2... will do
+      SetWindowTextW(font_sample, _W("Ferqœm’4€"));
+  }
+
+  //winctrl * c = (winctrl *)lParam;  // does not work
+  winctrl * c = font_ctrl;
+  if (msg == WM_COMMAND && wParam == 1026) {  // Apply
+    LOGFONTW lfapply;
+    SendMessageW(hdlg, WM_CHOOSEFONT_GETLOGFONT, 0, (LPARAM)&lfapply);
+    font_spec * fsp = &new_cfg.font;
+    wstrset(&fsp->name, lfapply.lfFaceName);
+    HDC dc = GetDC(0);
+    fsp->size = -MulDiv(lfapply.lfHeight, 72, GetDeviceCaps(dc, LOGPIXELSY));
+    trace_fontsel(("Apply lfHeight %ld -> size %d <%ls>\n", (long int)lfapply.lfHeight, fsp->size, lfapply.lfFaceName));
+    ReleaseDC(0, dc);
+    fsp->weight = lfapply.lfWeight;
+    fsp->isbold = (lfapply.lfWeight >= FW_BOLD);
+    // apply font
+    apply_config(false);
+    // update font spec label
+    c->ctrl->handler(c->ctrl, EVENT_REFRESH);  // -> dlg_stdfontsel_handler
+    //or dlg_fontsel_set(c->ctrl, fsp);
+  }
+  else if (msg == WM_COMMAND && wParam == 1) {  // OK
+#ifdef failed_workaround_for_no_font_issue
+    /*
+      Trying to work-around issue #507
+      "There is no font with that name."
+      "Choose a font from the list of fonts."
+      as it occurs with Meslo LG L DZ for Powerline
+    */
+    LOGFONTW lfapply;
+    SendMessageW(hdlg, WM_CHOOSEFONT_GETLOGFONT, 0, (LPARAM)&lfapply);
+    // lfapply.lfFaceName is "Meslo LG L DZ for Powerline"
+    HWND wnd = GetDlgItem(hdlg, c->base_id +99);
+    int size = GetWindowTextLengthW(wnd) + 1;
+    wchar * fn = newn(wchar, size);
+    GetWindowTextW(wnd, fn, size);
+    // fn is "Meslo LG L DZ for Powerline RegularForPowerline"
+    // trying to fix the inconsistency with
+    SetWindowTextW(wnd, lfapply.lfFaceName);
+    // does not help...
+    // what a crap!
+#endif
+  }
+  else if (msg == WM_COMMAND && wParam == 2) {  // Cancel
+  }
+  return 0;  // default processing
+}
 
 static void
 select_font(winctrl *c)
@@ -883,58 +1199,13 @@ select_font(winctrl *c)
   else
     lf.lfFaceName[0] = 0;
 
-  UINT_PTR CALLBACK fonthook(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam)
-  {
-    (void)lParam;
-    if (uiMsg == WM_COMMAND && wParam == 1026) {  // Apply
-      LOGFONTW lfapply;
-      SendMessageW(hdlg, WM_CHOOSEFONT_GETLOGFONT, 0, (LPARAM)&lfapply);
-      font_spec * fsp = &new_cfg.font;
-      wstrset(&fsp->name, lfapply.lfFaceName);
-      HDC dc = GetDC(0);
-      fsp->size = -MulDiv(lfapply.lfHeight, 72, GetDeviceCaps(dc, LOGPIXELSY));
-      trace_fontsel(("Apply lfHeight %ld -> size %d <%ls>\n", (long int)lfapply.lfHeight, fsp->size, lfapply.lfFaceName));
-      ReleaseDC(0, dc);
-      fsp->weight = lfapply.lfWeight;
-      fsp->isbold = (lfapply.lfWeight >= FW_BOLD);
-      // apply font
-      apply_config(false);
-      // update font spec label
-      c->ctrl->handler(c->ctrl, EVENT_REFRESH);  // -> dlg_stdfontsel_handler
-      //or dlg_fontsel_set(c->ctrl, fsp);
-    }
-    else if (uiMsg == WM_COMMAND && wParam == 1) {  // OK
-#ifdef failed_workaround_for_no_font_issue
-      /*
-        Trying to work-around issue #507
-        "There is no font with that name."
-        "Choose a font from the list of fonts."
-        as it occurs with Meslo LG L DZ for Powerline
-      */
-      LOGFONTW lfapply;
-      SendMessageW(hdlg, WM_CHOOSEFONT_GETLOGFONT, 0, (LPARAM)&lfapply);
-      // lfapply.lfFaceName is "Meslo LG L DZ for Powerline"
-      HWND wnd = GetDlgItem(hdlg, c->base_id +99);
-      int size = GetWindowTextLengthW(wnd) + 1;
-      wchar * fn = newn(wchar, size);
-      GetWindowTextW(wnd, fn, size);
-      // fn is "Meslo LG L DZ for Powerline RegularForPowerline"
-      // trying to fix the inconsistency with
-      SetWindowTextW(wnd, lfapply.lfFaceName);
-      // does not help...
-      // what a crap!
-#endif
-    }
-    else if (uiMsg == WM_COMMAND && wParam == 2) {  // Cancel
-    }
-    return 0;  // default processing
-  }
-
   CHOOSEFONTW cf;
-  cf.lStructSize = sizeof (cf);
+  cf.lStructSize = sizeof(cf);
   cf.hwndOwner = dlg.wnd;
   cf.lpLogFont = &lf;
   cf.lpfnHook = fonthook;
+  cf.lCustData = (LPARAM)c;  // does not work
+  font_ctrl = c;
   cf.Flags =
     CF_INITTOLOGFONTSTRUCT | CF_FORCEFONTEXIST
     | CF_FIXEDPITCHONLY | CF_NOVERTFONTS
@@ -953,7 +1224,10 @@ select_font(winctrl *c)
       CF_SCREENFONTS | CF_NOSCRIPTSEL;
 
   // open font selection menu
-  if (ChooseFontW(&cf)) {
+  HHOOK hook = SetWindowsHookEx(WH_CBT, set_labels, 0, GetCurrentThreadId());
+  bool ok = ChooseFontW(&cf);
+  UnhookWindowsHookEx(hook);
+  if (ok) {
     // font selection menu closed with OK
     wstrset(&fs.name, lf.lfFaceName);
     // here we could enumerate font widths and adjust...
@@ -1002,11 +1276,20 @@ winctrl_handle_command(UINT msg, WPARAM wParam, LPARAM lParam)
 
     SetMapMode(dc, MM_TEXT);   /* ensure logical units == pixels */
 
-    GetTextExtentPoint32(dc, (char *) c->data, strlen((char *) c->data), &s);
+    GetTextExtentPoint32A(dc, (char *) c->data, strlen((char *) c->data), &s);
     DrawEdge(dc, &r, EDGE_ETCHED, BF_ADJUST | BF_RECT);
-    TextOut(dc, r.left + (r.right - r.left - s.cx) / 2,
-            r.top + (r.bottom - r.top - s.cy) / 2, (char *) c->data,
-            strlen((char *) c->data));
+    string text = (string) c->data;
+    if (nonascii(text)) {
+      // assuming that the panel title is stored in UTF-8,
+      // transform it for proper Windows display
+      wchar * us = cs__utftowcs(text);
+      TextOutW(dc, r.left + (r.right - r.left - s.cx) / 2,
+               r.top + (r.bottom - r.top - s.cy) / 2, us, wcslen(us));
+      free(us);
+    }
+    else
+      TextOutA(dc, r.left + (r.right - r.left - s.cx) / 2,
+               r.top + (r.bottom - r.top - s.cy) / 2, text, strlen(text));
 
     return true;
   }
@@ -1130,13 +1413,15 @@ winctrl_handle_command(UINT msg, WPARAM wParam, LPARAM lParam)
   if (dlg.coloursel_wanted) {
     static CHOOSECOLOR cc;
     static DWORD custom[16] = { 0 };    /* zero initialisers */
-    cc.lStructSize = sizeof (cc);
+    cc.lStructSize = sizeof(cc);
     cc.hwndOwner = dlg.wnd;
     cc.hInstance = (HWND) inst;
     cc.lpCustColors = custom;
     cc.rgbResult = dlg.coloursel_result;
     cc.Flags = CC_FULLOPEN | CC_RGBINIT;
+    HHOOK hook = SetWindowsHookEx(WH_CBT, set_labels, 0, GetCurrentThreadId());
     dlg.coloursel_ok = ChooseColor(&cc);
+    UnhookWindowsHookEx(hook);
     dlg.coloursel_result = cc.rgbResult;
     ctrl->handler(ctrl, EVENT_CALLBACK);
   }
@@ -1191,9 +1476,17 @@ dlg_checkbox_get(control *ctrl)
 void
 dlg_editbox_set(control *ctrl, string text)
 {
+  if (nonascii(text)) {
+    // transform item for proper Windows display
+    wchar * us = cs__utftowcs(text);
+    dlg_editbox_set_w(ctrl, us);
+    free(us);
+    return;
+  }
+
   winctrl *c = ctrl->plat_ctrl;
   assert(c && c->ctrl->type == CTRL_EDITBOX);
-  SetDlgItemText(dlg.wnd, c->base_id + 1, text);
+  SetDlgItemTextA(dlg.wnd, c->base_id + 1, text);
 }
 
 void
@@ -1238,7 +1531,7 @@ dlg_editbox_get(control *ctrl, string *text_p)
   int size = GetWindowTextLength(wnd) + 1;
   char *text = (char *)*text_p;
   text = renewn(text, size);
-  GetWindowText(wnd, text, size);
+  GetWindowTextA(wnd, text, size);
   *text_p = text;
 }
 
@@ -1291,6 +1584,14 @@ dlg_listbox_clear(control *ctrl)
 void
 dlg_listbox_add(control *ctrl, string text)
 {
+  if (nonascii(text)) {
+    // transform item for proper Windows display
+    wchar * us = cs__utftowcs(text);
+    dlg_listbox_add_w(ctrl, us);
+    free(us);
+    return;
+  }
+
   winctrl *c = ctrl->plat_ctrl;
   int msg;
   assert(c &&
@@ -1314,6 +1615,24 @@ dlg_listbox_add_w(control *ctrl, wstring text)
   msg = (c->ctrl->type == CTRL_LISTBOX &&
          c->ctrl->listbox.height != 0 ? LB_ADDSTRING : CB_ADDSTRING);
   SendDlgItemMessageW(dlg.wnd, c->base_id + 1, msg, 0, (LPARAM) text);
+}
+
+int
+dlg_listbox_getcur(control *ctrl)
+{
+  winctrl *c = ctrl->plat_ctrl;
+  assert(c &&
+         (c->ctrl->type == CTRL_LISTBOX ||
+          (c->ctrl->type == CTRL_EDITBOX &&
+           c->ctrl->editbox.has_list)));
+  int idx;
+  if (c->ctrl->type == CTRL_LISTBOX)
+    idx = SendDlgItemMessage(dlg.wnd, c->base_id + 1, LB_GETCURSEL, 0, 0);
+  else
+    idx = SendDlgItemMessage(dlg.wnd, c->base_id + 1, CB_GETCURSEL, 0, 0);
+  //HWND wnd = GetDlgItem(dlg.wnd, c->base_id + 1);
+  //idx = SendMessage(wnd, LB_/CB_GETCURSEL, 0, (LPARAM)0);
+  return idx;
 }
 
 void
@@ -1362,7 +1681,7 @@ dlg_fontsel_set(control *ctrl, font_spec *fs)
              fs->size < 0 ? "px" : "pt")
     : asform("%s, %sdefault size", fn, boldstr);
   free(fn);
-  SetDlgItemText(dlg.wnd, c->base_id + 1, buf);
+  SetDlgItemTextA(dlg.wnd, c->base_id + 1, buf);
   free(buf);
 #endif
 }
@@ -1389,9 +1708,8 @@ dlg_set_focus(control *ctrl)
       while (id > 1 && IsDlgButtonChecked(dlg.wnd, id))
         --id;
      /*
-      * In the theoretically-unlikely case that no button was
-      * selected, id should come out of this as 1, which is a
-      * reasonable enough choice.
+      * In the theoretically-unlikely case that no button was selected, 
+      * id should come out of this as 1, which is a reasonable enough choice.
       */
     otherwise: id = c->base_id;
   }
@@ -1399,9 +1717,8 @@ dlg_set_focus(control *ctrl)
 }
 
 /*
- * This function signals to the front end that the dialog's
- * processing is completed, and passes an integer value (typically
- * a success status).
+ * This function signals to the front end that the dialog's processing is 
+ * completed, and passes an integer value (typically a success status).
  */
 void
 dlg_end(void)

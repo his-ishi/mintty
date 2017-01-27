@@ -15,6 +15,7 @@
 #include <winbase.h>
 #include <winnls.h>
 
+
 static cs_mode mode = CSM_DEFAULT;
 
 static string default_locale;  // Used unless UTF-8 or ACP mode is on.
@@ -185,22 +186,29 @@ init_locale_menu(void)
 {
   uint count = 0;
 
-  void add_lcid(LCID lcid) {
-    char locale[8];
-    int lang_len = GetLocaleInfo(lcid, LOCALE_SISO639LANGNAME,
-                                 locale, sizeof locale);
-    if (!lang_len)
-      return;
-    if (GetLocaleInfo(lcid, LOCALE_SISO3166CTRYNAME,
-                      locale + lang_len, sizeof locale - lang_len))
-      locale[lang_len - 1] = '_';
+  void add_lc(char * locale) {
     for (uint i = 1; i < count; i++)
       if (!strcmp(locale, locale_menu[i]))
         return;
     locale_menu[count++] = strdup(locale);
   }
 
-  locale_menu[count++] = __("(Default)");
+  void add_lcid(LCID lcid) {
+    char locale[18];  // max 9 (incl NUL) per GetLocaleInfo + '_'
+      // https://msdn.microsoft.com/en-us/library/windows/desktop/dd373848%28v=vs.85%29.aspx
+
+    int lang_len = GetLocaleInfoA(lcid, LOCALE_SISO639LANGNAME,
+                                  locale, sizeof locale);
+    if (!lang_len)
+      return;
+    if (GetLocaleInfoA(lcid, LOCALE_SISO3166CTRYNAME,
+                       locale + lang_len, sizeof locale - lang_len))
+      locale[lang_len - 1] = '_';
+
+    add_lc(locale);
+  }
+
+  locale_menu[count++] = _("(Default)");
   add_lcid(GetUserDefaultUILanguage());
   add_lcid(LOCALE_USER_DEFAULT);
   add_lcid(LOCALE_SYSTEM_DEFAULT);
@@ -211,7 +219,7 @@ init_locale_menu(void)
 static void
 init_charset_menu(void)
 {
-  charset_menu[0] = __("(Default)");
+  charset_menu[0] = _("(Default)");
 
   string *p = charset_menu + 1;
   for (uint i = 0; i < lengthof(cs_descs); i++) {
@@ -222,11 +230,11 @@ init_charset_menu(void)
 
   string oem_cs = cs_name(GetOEMCP());
   if (*oem_cs == 'C')
-    *p++ = asform("%s %s", oem_cs, __("(OEM codepage)"));
+    *p++ = asform("%s %s", oem_cs, _("(OEM codepage)"));
 
   string ansi_cs = cs_name(GetACP());
   if (*ansi_cs == 'C')
-    *p++ = asform("%s %s", ansi_cs, __("(ANSI codepage)"));
+    *p++ = asform("%s %s", ansi_cs, _("(ANSI codepage)"));
 }
 
 static void
@@ -357,6 +365,12 @@ getlocenv(string name)
   return val && *val ? val : 0;
 }
 
+string
+getlocenvcat(string category)
+{
+  return getlocenv("LC_ALL") ?: getlocenv(category) ?: getlocenv("LANG");
+}
+
 void
 cs_init(void)
 {
@@ -367,7 +381,7 @@ cs_init(void)
 #if HAS_LOCALES
     setlocale(LC_CTYPE, "") ?:
 #endif
-    getlocenv("LC_ALL") ?: getlocenv("LC_CTYPE") ?: getlocenv("LANG");
+    getlocenvcat("LC_CTYPE");
 
   env_locale = env_locale ? strdup(env_locale) : "C";
 
@@ -418,6 +432,18 @@ cs_mbstowcs(wchar *ws, const char *s, size_t wlen)
     return mbstowcs(ws, s, wlen);
 #endif
   return MultiByteToWideChar(codepage, 0, s, -1, ws, wlen) - 1;
+}
+
+bool
+nonascii(string s)
+{
+  if (!s)
+    return false;
+  while (*s) {
+    if (*s++ & 0x80)
+      return true;
+  }
+  return false;
 }
 
 char *
@@ -494,6 +520,28 @@ cs__utforansitowcs(const char * s)
     wchar * ws = malloc(size1 * sizeof(wchar));  // includes terminating NUL
     MultiByteToWideChar(CP_ACP, 0, s, -1, ws, size1);
     return ws;
+  }
+}
+
+char *
+cs__utftombs(char * s)
+{
+//#if CYGWIN_VERSION_API_MINOR >= 66
+#if HAS_LOCALES
+  bool utf8out = strcmp(nl_langinfo(CODESET), "UTF-8") == 0;
+#else
+  char * loc = (char *)cs_get_locale();
+  if (!loc)
+    loc = "";
+  bool utf8out = strstr(loc, ".65001");
+#endif
+  if (utf8out)
+    return strdup(s);
+  else {
+    wchar * w = cs__utftowcs(s);
+    char * mbs = cs__wcstombs(w);
+    delete(w);
+    return mbs;
   }
 }
 
@@ -637,6 +685,123 @@ wcsdup(const wchar * s)
   wcscpy(dup, s);
   return dup;
 }
+
+#endif
+
+
+/*
+   path conversions
+*/
+
+#ifdef __CYGWIN__
+#include <sys/cygwin.h>
+# if CYGWIN_VERSION_API_MINOR >= 181
+
+char *
+path_win_w_to_posix(const wchar * wp)
+{
+#ifdef let_cygwin_malloc
+#warning may return null with errno == ENOSPC
+  return cygwin_create_path(CCP_WIN_W_TO_POSIX, wp);
+#else
+  int size = cygwin_conv_path(CCP_WIN_W_TO_POSIX, wp, 0, 0);
+  char * res;
+  if (size >= 0) {
+    res = malloc(size);
+    size = cygwin_conv_path(CCP_WIN_W_TO_POSIX, wp, res, size);
+    if (size >= 0)
+      return res;
+    free(res);
+  }
+  res = newn(char, 1);
+  *res = '\0';
+  return res;
+#endif
+}
+
+wchar *
+path_posix_to_win_w(const char * p)
+{
+#ifdef let_cygwin_malloc
+#warning may return null with errno == ENOSPC
+  return cygwin_create_path(CCP_POSIX_TO_WIN_W, p);
+#else
+  int size = cygwin_conv_path(CCP_POSIX_TO_WIN_W, p, 0, 0);
+  wchar * res;
+  if (size >= 0) {
+    res = malloc(size);
+    size = cygwin_conv_path(CCP_POSIX_TO_WIN_W, p, res, size);
+    if (size >= 0)
+      return res;
+    free(res);
+  }
+  res = newn(wchar, 1);
+  *res = '\0';
+  return res;
+#endif
+}
+
+char *
+path_posix_to_win_a(const char * p)
+{
+#ifdef let_cygwin_malloc
+#warning may return null with errno == ENOSPC
+  return cygwin_create_path(CCP_POSIX_TO_WIN_A, p);
+#else
+  int size = cygwin_conv_path(CCP_POSIX_TO_WIN_A, p, 0, 0);
+  char * res;
+  if (size >= 0) {
+    res = malloc(size);
+    size = cygwin_conv_path(CCP_POSIX_TO_WIN_A, p, res, size);
+    if (size >= 0)
+      return res;
+    free(res);
+  }
+  res = newn(char, 1);
+  *res = '\0';
+  return res;
+#endif
+}
+
+# else
+#include <winbase.h>
+#include <winnls.h>
+
+char *
+path_win_w_to_posix(const wchar * wp)
+{
+  char * mp = cs__wcstombs(wp);
+  char * p = newn(char, MAX_PATH);
+  cygwin_conv_to_full_posix_path(mp, p);
+  free(mp);
+  p = renewn(p, strlen(p) + 1);
+  return p;
+}
+
+wchar *
+path_posix_to_win_w(const char * p)
+{
+  char ap[MAX_PATH];
+  cygwin_conv_to_win32_path(p, ap);
+  wchar * wp = newn(wchar, MAX_PATH);
+  MultiByteToWideChar(0, 0, ap, -1, wp, MAX_PATH);
+  wp = renewn(wp, wcslen(wp) + 1);
+  return wp;
+}
+
+char *
+path_posix_to_win_a(const char * p)
+{
+  char * ap = newn(char, MAX_PATH);
+  cygwin_conv_to_win32_path(p, ap);
+  ap = renewn(ap, strlen(ap) + 1);
+  return ap;
+}
+
+# endif
+#else
+
+#warning port to midipix...
 
 #endif
 

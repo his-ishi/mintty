@@ -27,6 +27,8 @@ static inline xchar
 combine_surrogates(wchar hwc, wchar lwc)
 { return 0x10000 + ((hwc & 0x3FF) << 10) + (lwc & 0x3FF); }
 
+extern string getlocenvcat(string category);
+
 extern void cs_init(void);
 extern void cs_reconfig(void);
 
@@ -44,12 +46,14 @@ extern int cs_mbstowcs(wchar *ws, const char *s, size_t wlen);
 extern int cs_mb1towc(wchar *pwc, char c);
 extern wchar cs_btowc_glyph(char);
 
+extern bool nonascii(string s);
 extern char * cs__wcstombs(const wchar * ws);
 extern char * cs__wcstombs_dropill(const wchar * ws);
 extern char * cs__wcstoutf(const wchar * ws);
 extern wchar * cs__mbstowcs(const char * s);
 extern wchar * cs__utftowcs(const char * s);
 extern wchar * cs__utforansitowcs(const char * s);
+extern char * cs__utftombs(char * s);
 
 extern string locale_menu[];
 extern string charset_menu[];
@@ -70,67 +74,14 @@ extern bool extrawide(xchar c);
 extern bool combiningdouble(xchar c);
 extern bool widerange(xchar c);
 
-#endif
+
+// path conversions
+extern char * path_win_w_to_posix(const wchar * wp);
+extern wchar * path_posix_to_win_w(const char * p);
+extern char * path_posix_to_win_a(const char * p);
 
 
-#ifdef __CYGWIN__
-#include <sys/cygwin.h>
-# if CYGWIN_VERSION_API_MINOR >= 181
-
-static inline char *
-path_win_w_to_posix(const wchar * wp)
-{ return cygwin_create_path(CCP_WIN_W_TO_POSIX, wp); }
-
-static inline wchar *
-path_posix_to_win_w(const char * p)
-{ return cygwin_create_path(CCP_POSIX_TO_WIN_W, p); }
-
-static inline char *
-path_posix_to_win_a(const char * p)
-{ return cygwin_create_path(CCP_POSIX_TO_WIN_A, p); }
-
-# else
-#include <winbase.h>
-#include <winnls.h>
-
-static inline char *
-path_win_w_to_posix(const wchar * wp)
-{
-  char * mp = cs__wcstombs(wp);
-  char * p = newn(char, MAX_PATH);
-  cygwin_conv_to_full_posix_path(mp, p);
-  free(mp);
-  p = renewn(p, strlen(p) + 1);
-  return p;
-}
-
-static inline wchar *
-path_posix_to_win_w(const char * p)
-{
-  char ap[MAX_PATH];
-  cygwin_conv_to_win32_path(p, ap);
-  wchar * wp = newn(wchar, MAX_PATH);
-  MultiByteToWideChar(0, 0, ap, -1, wp, MAX_PATH);
-  wp = renewn(wp, wcslen(wp) + 1);
-  return wp;
-}
-
-static inline char *
-path_posix_to_win_a(const char * p)
-{
-  char * ap = newn(char, MAX_PATH);
-  cygwin_conv_to_win32_path(p, ap);
-  ap = renewn(ap, strlen(ap) + 1);
-  return ap;
-}
-
-# endif
-#else
-
-#warning port to midipix...
-
-#endif
-
+// wchar functions
 
 #define dont_debug_wcs
 
@@ -157,6 +108,7 @@ extern int wcscmp(const wchar * s1, const wchar * s2);
 // needed for MinGW MSYS
 
 #define wcscpy(tgt, src) memcpy(tgt, src, (wcslen(src) + 1) * sizeof(wchar))
+#define wcscat(tgt, src) wcscpy(&tgt[wcslen(tgt)], src)
 extern wchar * wcschr(const wchar * s, wchar c);
 extern wchar * wcsrchr(const wchar * s, wchar c);
 extern int wcsncmp(const wchar * s1, const wchar * s2, int len);
@@ -169,3 +121,5 @@ extern wchar * wcsdup(const wchar * s);
 
 #endif
 
+
+#endif
