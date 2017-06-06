@@ -23,6 +23,7 @@ extern int cell_width, cell_height;  // includes spacing
 extern int PADDING;
 
 extern bool disable_bidi;
+extern bool support_wsl;
 
 extern bool win_is_fullscreen;
 extern uint dpi;
@@ -59,5 +60,7 @@ extern void win_switch(bool back, bool alternate);
 extern int search_monitors(int * minx, int * miny, HMONITOR lookup_mon, bool get_primary, MONITORINFO *mip);
 
 extern void win_set_ime_open(bool);
+
+extern void show_message(char * msg, UINT type);
 
 #endif

@@ -21,6 +21,8 @@ static bool alt_F2_home = false;
 static int alt_F2_monix = 0, alt_F2_moniy = 0;
 
 
+/* Menu handling */
+
 void
 win_update_menus(void)
 {
@@ -29,20 +31,23 @@ win_update_menus(void)
   bool alt_fn = shorts && cfg.alt_fn_shortcuts;
   bool ct_sh = shorts && cfg.ctrl_shift_shortcuts;
 
-  ModifyMenu(
+  ModifyMenuW(
     sysmenu, IDM_NEW, 0, IDM_NEW,
-    alt_fn ? "Ne&w\tAlt+F2" : ct_sh ? "Ne&w\tCtrl+Shift+N" : "Ne&w"
+    alt_fn ? _W("Ne&w\tAlt+F2") :
+    ct_sh ? _W("Ne&w\tCtrl+Shift+N") : _W("Ne&w")
   );
-  ModifyMenu(
+  ModifyMenuW(
     sysmenu, SC_CLOSE, 0, SC_CLOSE,
-    alt_fn ? "&Close\tAlt+F4" : ct_sh ? "&Close\tCtrl+Shift+W" : "&Close"
+    alt_fn ? _W("&Close\tAlt+F4") :
+    ct_sh ? _W("&Close\tCtrl+Shift+W") : _W("&Close")
   );
 
   uint sel_enabled = term.selected ? MF_ENABLED : MF_GRAYED;
   EnableMenuItem(ctxmenu, IDM_OPEN, sel_enabled);
-  ModifyMenu(
+  ModifyMenuW(
     ctxmenu, IDM_COPY, sel_enabled, IDM_COPY,
-    clip ? "&Copy\tCtrl+Ins" : ct_sh ? "&Copy\tCtrl+Shift+C" : "&Copy"
+    clip ? _W("&Copy\tCtrl+Ins") :
+    ct_sh ? _W("&Copy\tCtrl+Shift+C") : _W("&Copy")
   );
 
   uint paste_enabled =
@@ -50,42 +55,45 @@ win_update_menus(void)
     IsClipboardFormatAvailable(CF_UNICODETEXT) ||
     IsClipboardFormatAvailable(CF_HDROP)
     ? MF_ENABLED : MF_GRAYED;
-  ModifyMenu(
+  ModifyMenuW(
     ctxmenu, IDM_PASTE, paste_enabled, IDM_PASTE,
-    clip ? "&Paste\tShift+Ins" : ct_sh ? "&Paste\tCtrl+Shift+V" : "&Paste"
+    clip ? _W("&Paste\tShift+Ins") :
+    ct_sh ? _W("&Paste\tCtrl+Shift+V") : _W("&Paste")
   );
 
-  ModifyMenu(
+  ModifyMenuW(
     ctxmenu, IDM_SEARCH, 0, IDM_SEARCH,
-    alt_fn ? "S&earch\tAlt+F3" : ct_sh ? "S&earch\tCtrl+Shift+H" : "S&earch"
+    alt_fn ? _W("S&earch\tAlt+F3") :
+    ct_sh ? _W("S&earch\tCtrl+Shift+H") : _W("S&earch")
   );
 
-  ModifyMenu(
+  ModifyMenuW(
     ctxmenu, IDM_RESET, 0, IDM_RESET,
-    alt_fn ? "&Reset\tAlt+F8" : ct_sh ? "&Reset\tCtrl+Shift+R" : "&Reset"
+    alt_fn ? _W("&Reset\tAlt+F8") :
+    ct_sh ? _W("&Reset\tCtrl+Shift+R") : _W("&Reset")
   );
 
   uint defsize_enabled =
     IsZoomed(wnd) || term.cols != cfg.cols || term.rows != cfg.rows
     ? MF_ENABLED : MF_GRAYED;
-  ModifyMenu(
+  ModifyMenuW(
     ctxmenu, IDM_DEFSIZE_ZOOM, defsize_enabled, IDM_DEFSIZE_ZOOM,
-    alt_fn ? "&Default size\tAlt+F10" :
-    ct_sh ? "&Default size\tCtrl+Shift+D" : "&Default size"
+    alt_fn ? _W("&Default size\tAlt+F10") :
+    ct_sh ? _W("&Default size\tCtrl+Shift+D") : _W("&Default size")
   );
 
   uint fullscreen_checked = win_is_fullscreen ? MF_CHECKED : MF_UNCHECKED;
-  ModifyMenu(
+  ModifyMenuW(
     ctxmenu, IDM_FULLSCREEN_ZOOM, fullscreen_checked, IDM_FULLSCREEN_ZOOM,
-    alt_fn ? "&Full Screen\tAlt+F11" :
-    ct_sh ? "&Full Screen\tCtrl+Shift+F" : "&Full Screen"
+    alt_fn ? _W("&Full Screen\tAlt+F11") :
+    ct_sh ? _W("&Full Screen\tCtrl+Shift+F") : _W("&Full Screen")
   );
 
   uint otherscreen_checked = term.show_other_screen ? MF_CHECKED : MF_UNCHECKED;
-  ModifyMenu(
+  ModifyMenuW(
     ctxmenu, IDM_FLIPSCREEN, otherscreen_checked, IDM_FLIPSCREEN,
-    alt_fn ? "Flip &Screen\tAlt+F12" :
-    ct_sh ? "Flip &Screen\tCtrl+Shift+S" : "Flip &Screen"
+    alt_fn ? _W("Flip &Screen\tAlt+F12") :
+    ct_sh ? _W("Flip &Screen\tCtrl+Shift+S") : _W("Flip &Screen")
   );
 
   uint options_enabled = config_wnd ? MF_GRAYED : MF_ENABLED;
@@ -97,20 +105,20 @@ static void
 win_init_ctxmenu(void)
 {
   ctxmenu = CreatePopupMenu();
-  AppendMenu(ctxmenu, MF_ENABLED, IDM_OPEN, "Ope&n");
-  AppendMenu(ctxmenu, MF_SEPARATOR, 0, 0);
-  AppendMenu(ctxmenu, MF_ENABLED, IDM_COPY, 0);
-  AppendMenu(ctxmenu, MF_ENABLED, IDM_PASTE, 0);
-  AppendMenu(ctxmenu, MF_ENABLED, IDM_SELALL, "Select &All");
-  AppendMenu(ctxmenu, MF_SEPARATOR, 0, 0);
-  AppendMenu(ctxmenu, MF_ENABLED, IDM_SEARCH, 0);
-  AppendMenu(ctxmenu, MF_ENABLED, IDM_RESET, 0);
-  AppendMenu(ctxmenu, MF_SEPARATOR, 0, 0);
-  AppendMenu(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_DEFSIZE_ZOOM, 0);
-  AppendMenu(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_FULLSCREEN_ZOOM, 0);
-  AppendMenu(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_FLIPSCREEN, 0);
-  AppendMenu(ctxmenu, MF_SEPARATOR, 0, 0);
-  AppendMenu(ctxmenu, MF_ENABLED, IDM_OPTIONS, "&Options...");
+  AppendMenuW(ctxmenu, MF_ENABLED, IDM_OPEN, _W("Ope&n"));
+  AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED, IDM_COPY, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED, IDM_PASTE, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED, IDM_SELALL, _W("Select &All"));
+  AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED, IDM_SEARCH, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED, IDM_RESET, 0);
+  AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_DEFSIZE_ZOOM, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_FULLSCREEN_ZOOM, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_FLIPSCREEN, 0);
+  AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED, IDM_OPTIONS, _W("&Options..."));
 }
 
 void
@@ -119,10 +127,10 @@ win_init_menus(void)
   win_init_ctxmenu();
 
   sysmenu = GetSystemMenu(wnd, false);
-  InsertMenu(sysmenu, SC_CLOSE, MF_ENABLED, IDM_COPYTITLE, "Copy &Title");
-  InsertMenu(sysmenu, SC_CLOSE, MF_ENABLED, IDM_OPTIONS, "&Options...");
-  InsertMenu(sysmenu, SC_CLOSE, MF_ENABLED, IDM_NEW, 0);
-  InsertMenu(sysmenu, SC_CLOSE, MF_SEPARATOR, 0, 0);
+  InsertMenuW(sysmenu, SC_CLOSE, MF_ENABLED, IDM_COPYTITLE, _W("Copy &Title"));
+  InsertMenuW(sysmenu, SC_CLOSE, MF_ENABLED, IDM_OPTIONS, _W("&Options..."));
+  InsertMenuW(sysmenu, SC_CLOSE, MF_ENABLED, IDM_NEW, 0);
+  InsertMenuW(sysmenu, SC_CLOSE, MF_SEPARATOR, 0, 0);
 }
 
 static void
@@ -151,6 +159,9 @@ win_popup_menu(void)
   open_popup_menu(&p);
 }
 
+
+/* Mouse and Keyboard modifiers */
+
 typedef enum {
   ALT_CANCELLED = -1, ALT_NONE = 0, ALT_ALONE = 1,
   ALT_OCT = 8, ALT_DEC = 10, ALT_HEX = 16
@@ -172,6 +183,9 @@ get_mods(void)
     is_key_down(VK_MENU) * MDK_ALT |
     (lctrl | is_key_down(VK_RCONTROL)) * MDK_CTRL;
 }
+
+
+/* Mouse handling */
 
 static void
 update_mouse(mod_keys mods)
@@ -338,13 +352,44 @@ vk_name(uint key)
 }
 #endif
 
+typedef enum {
+  COMP_CLEAR = -1,
+  COMP_NONE = 0,
+  COMP_PENDING = 1, COMP_ACTIVE = 2
+} comp_state_t;
+static comp_state_t comp_state = COMP_NONE;
+static uint last_key = 0;
+
+static struct {
+  wchar kc[4];
+  char * s;
+} composed[] = {
+#include "composed.t"
+};
+static wchar compose_buf[lengthof(composed->kc) + 4];
+static int compose_buflen = 0;
+
+static void
+compose_clear()
+{
+  comp_state = COMP_CLEAR;
+  compose_buflen = 0;
+  last_key = 0;
+}
+
 void
 win_key_reset(void)
 {
   alt_state = ALT_NONE;
+  compose_clear();
 }
 
+#define dont_debug_compose
 #define dont_debug_key
+
+#ifdef debug_compose
+# define debug_key
+#endif
 
 #ifdef debug_key
 #define trace_key(tag)	printf(" <-%s\n", tag)
@@ -356,16 +401,22 @@ bool
 win_key_down(WPARAM wp, LPARAM lp)
 {
   uint key = wp;
+  last_key = key;
+
+  if (comp_state == COMP_ACTIVE)
+    comp_state = COMP_PENDING;
+  else if (comp_state == COMP_CLEAR)
+    comp_state = COMP_NONE;
 
 #ifdef debug_virtual_key_codes
-  printf("win_key_down %s\n", vk_name(key));
+  printf("win_key_down %04X %s\n", key, vk_name(key));
 #endif
 
   if (key == VK_PROCESSKEY) {
     TranslateMessage(
       &(MSG){.hwnd = wnd, .message = WM_KEYDOWN, .wParam = wp, .lParam = lp}
     );
-    return 1;
+    return true;
   }
 
   uint scancode = HIWORD(lp) & (KF_EXTENDED | 0xFF);
@@ -407,7 +458,7 @@ win_key_down(WPARAM wp, LPARAM lp)
   if (key == VK_MENU) {
     if (!repeat && mods == MDK_ALT && alt_state == ALT_NONE)
       alt_state = ALT_ALONE;
-    return 1;
+    return true;
   }
 
   alt_state_t old_alt_state = alt_state;
@@ -425,7 +476,7 @@ win_key_down(WPARAM wp, LPARAM lp)
       ClientToScreen(wnd, &p);
       open_popup_menu(&p);
     }
-    return 1;
+    return true;
   }
 
   // Exit when pressing Enter or Escape while holding the window open after
@@ -449,7 +500,7 @@ win_key_down(WPARAM wp, LPARAM lp)
                        alt_F2_monix = 0; alt_F2_moniy = 0; alt_F2_home = false;
       }
     }
-    return 1;
+    return true;
   }
 
   if (!term.shortcut_override) {
@@ -460,7 +511,7 @@ win_key_down(WPARAM wp, LPARAM lp)
         term_copy();
       if (shift)
         win_paste();
-      return 1;
+      return true;
     }
 
 #ifdef check_alt_ret_space_first
@@ -470,11 +521,11 @@ win_key_down(WPARAM wp, LPARAM lp)
       if (key == VK_RETURN) {
         trace_resize (("--- Alt-Enter (shift %d)", shift));
         send_syscommand(IDM_FULLSCREEN_ZOOM);
-        return 1;
+        return true;
       }
       else if (key == VK_SPACE) {
         send_syscommand(SC_KEYMENU);
-        return 1;
+        return true;
       }
     }
 #endif
@@ -500,7 +551,7 @@ win_key_down(WPARAM wp, LPARAM lp)
           when VK_F12: send_syscommand(IDM_FLIPSCREEN);
         }
       }
-      return 1;
+      return true;
     }
 
     // Ctrl+Shift+letter shortcuts
@@ -519,7 +570,7 @@ win_key_down(WPARAM wp, LPARAM lp)
         when 'S': send_syscommand(IDM_FLIPSCREEN);
         when 'H': send_syscommand(IDM_SEARCH);
       }
-      return 1;
+      return true;
     }
 
     // Scrollback
@@ -540,7 +591,7 @@ win_key_down(WPARAM wp, LPARAM lp)
           otherwise: goto not_scroll;
         }
         SendMessage(wnd, WM_VSCROLL, scroll, 0);
-        return 1;
+        return true;
         not_scroll:;
       }
     }
@@ -564,7 +615,7 @@ win_key_down(WPARAM wp, LPARAM lp)
         otherwise: goto not_zoom;
       }
       win_zoom_font(zoom, mods & MDK_SHIFT);
-      return 1;
+      return true;
       not_zoom:;
     }
   }
@@ -590,12 +641,12 @@ win_key_down(WPARAM wp, LPARAM lp)
         when VK_OEM_MINUS: zoom = -1; mods &= ~MDK_SHIFT;
         when VK_OEM_PLUS:  zoom = 1; mods &= ~MDK_SHIFT;
         when '0':          zoom = 0;
-        otherwise: return 0;
+        otherwise: return false;
       }
       win_zoom_font(zoom, mods & MDK_SHIFT);
-      return 1;
+      return true;
     }
-    return 0;
+    return false;
   }
 
   // Keycode buffers
@@ -618,6 +669,7 @@ win_key_down(WPARAM wp, LPARAM lp)
       len = sprintf(buf, "\e[%u;%du", c, mods + 9);
     else
 #endif
+    trace_key("other");
     len = sprintf(buf, "\e[%u;%cu", c, mods + '1');
   }
   void app_pad_code(char c) {
@@ -729,6 +781,58 @@ static struct {
           break;
         }
 
+    // Compose characters
+    if (comp_state) {
+#ifdef debug_compose
+      printf("comp (%d)", wlen);
+      for (int i = 0; i < compose_buflen; i++) printf(" %04X", compose_buf[i]);
+      printf(" +");
+      for (int i = 0; i < wlen; i++) printf(" %04X", wbuf[i]);
+      printf("\n");
+#endif
+      for (int i = 0; i < wlen; i++)
+        compose_buf[compose_buflen++] = wbuf[i];
+      uint comp_len = min((uint)compose_buflen, lengthof(composed->kc));
+      bool found = false;
+      for (uint k = 0; k < lengthof(composed); k++)
+        if (0 == wcsncmp(compose_buf, composed[k].kc, comp_len)) {
+          if (comp_len < lengthof(composed->kc) && composed[k].kc[comp_len]) {
+            // partial match
+            comp_state = COMP_ACTIVE;
+            return true;
+          }
+          else {
+            // match
+            ///can there be an uncomposed rest in wbuf? should we consider it?
+#ifdef utf8_only
+            ///alpha, UTF-8 only, unchecked...
+            strcpy(buf + len, composed[k].s);
+            len += strlen(composed[k].s);
+            compose_buflen = 0;
+            return true;
+#else
+            wchar * wc = cs__utftowcs(composed[k].s);
+            wlen = 0;
+            while (wc[wlen] && wlen < (int)lengthof(wbuf)) {
+              wbuf[wlen] = wc[wlen];
+              wlen++;
+            }
+            free(wc);
+            found = true;  // fall through, but skip error handling
+#endif
+          }
+        }
+      ///should we deliver compose_buf[] first...?
+      compose_buflen = 0;
+      if (!found) {
+        // unknown compose sequence
+        win_bell(&cfg);
+        // continue without composition
+      }
+    }
+    else
+      compose_buflen = 0;
+
     // Check that the keycode can be converted to the current charset
     // before returning success.
     int mblen = cs_wcntombn(buf + len, wbuf, lengthof(buf) - len, wlen);
@@ -748,6 +852,9 @@ static struct {
   wchar undead_keycode(void) {
     wchar wc;
     int len = ToUnicode(key, scancode, kbd, &wc, 1, 0);
+#ifdef debug_key
+    printf("undead %04X scn %d -> %d %04X\n", key, scancode, len, wc);
+#endif
     if (len < 0) {
       // Ugly hack to clear dead key state, a la Michael Kaplan.
       uchar empty_kbd[256];
@@ -763,11 +870,17 @@ static struct {
   void modify_other_key(void) {
     wchar wc = undead_keycode();
     if (!wc) {
+#ifdef debug_key
+      printf("modf !wc mods %d shft %d\n", mods, mods & MDK_SHIFT);
+#endif
       if (mods & MDK_SHIFT) {
         kbd[VK_SHIFT] = 0;
         wc = undead_keycode();
       }
     }
+#ifdef debug_key
+    printf("modf wc %04X\n", wc);
+#endif
     if (wc) {
       if (altgr && !is_key_down(VK_LMENU))
         mods &= ~ MDK_ALT;
@@ -908,10 +1021,9 @@ static struct {
       if (!term.shortcut_override && cfg.window_shortcuts && alt && !ctrl) {
         trace_resize (("--- Alt-Enter (shift %d)", shift));
         send_syscommand(IDM_FULLSCREEN_ZOOM);
-        return 1;
+        return true;
       }
-      else
-      if (extended && !numlock && term.app_keypad)
+      else if (extended && !numlock && term.app_keypad)
         //mod_ss3('M');
         app_pad_code('M' - '@');
       else if (!extended && term.modify_other_keys && (shift || ctrl))
@@ -935,16 +1047,16 @@ static struct {
           // could try something with KeyboardHook:
           // http://www.codeproject.com/Articles/14485/Low-level-Windows-API-hooks-from-C-to-stop-unwante
           win_switch(shift, true);
-          return 1;
+          return true;
         }
         else
-          return 0;
+          return false;
       }
       if (!ctrl)
         shift ? csi('Z') : ch('\t');
       else if (cfg.switch_shortcuts) {
         win_switch(shift, false);
-        return 1;
+        return true;
       }
       else
         term.modify_other_keys ? other_code('\t') : mod_csi('I');
@@ -999,33 +1111,48 @@ static struct {
     when VK_NUMPAD0 ... VK_NUMPAD9:
       if ((term.app_cursor_keys || !term.app_keypad) &&
           alt_code_numpad_key(key - VK_NUMPAD0));
-      else if (layout());
-      else app_pad_code(key - VK_NUMPAD0 + '0');
+      else if (layout())
+        ;
+      else
+        app_pad_code(key - VK_NUMPAD0 + '0');
     when 'A' ... 'Z' or ' ': {
       bool check_menu = key == VK_SPACE && !term.shortcut_override
                         && cfg.window_shortcuts && alt && !ctrl;
-      if (altgr_key()) trace_key("altgr");
-      else
-      if (check_menu) {
+#ifdef debug_key
+      printf("mods %d (modf %d)\n", mods, term.modify_other_keys);
+#endif
+      if (altgr_key())
+        trace_key("altgr");
+      else if (check_menu) {
         send_syscommand(SC_KEYMENU);
-        return 1;
+        return true;
       }
-      else
-      if (key != ' ' && alt_code_key(key - 'A' + 0xA)) trace_key("alt");
-      else if (char_key()) trace_key("char");
-      else if (term.modify_other_keys > 1)
+      else if (key != ' ' && alt_code_key(key - 'A' + 0xA))
+        trace_key("alt");
+      else if (term.modify_other_keys > 1 && mods == MDK_SHIFT)
+        // catch Shift+space (not losing Alt+ combinations if handled here)
         modify_other_key();
-      else if (ctrl_key()) trace_key("ctrl");
+      else if (char_key())
+        trace_key("char");
+      else if (term.modify_other_keys > 1)
+        // handled Alt+space after char_key, avoiding undead_ glitch
+        modify_other_key();
+      else if (ctrl_key())
+        trace_key("ctrl");
       else
         ctrl_ch(CTRL(key));
     }
     when '0' ... '9' or VK_OEM_1 ... VK_OEM_102:
-      if (key <= '9' && alt_code_key(key - '0'));
-      else if (char_key());
-      else if (term.modify_other_keys <= 1 && ctrl_key());
+      if (key <= '9' && alt_code_key(key - '0'))
+        ;
+      else if (char_key())
+        ;
+      else if (term.modify_other_keys <= 1 && ctrl_key())
+        ;
       else if (term.modify_other_keys)
         modify_other_key();
-      else if (zoom_hotkey());
+      else if (zoom_hotkey())
+        ;
       else if (key <= '9')
         app_pad_code(key);
       else if (VK_OEM_PLUS <= key && key <= VK_OEM_PERIOD)
@@ -1044,19 +1171,32 @@ static struct {
   if (len) {
     while (count--)
       child_send(buf, len);
+    compose_clear();
   }
+  else if (comp_state == COMP_PENDING)
+    comp_state = COMP_ACTIVE;
 
-  return 1;
+  return true;
 }
 
 bool
 win_key_up(WPARAM wp, LPARAM unused(lp))
 {
+  uint key = wp;
 #ifdef debug_virtual_key_codes
-  printf("  win_key_up %s\n", vk_name((uint)wp));
+  printf("  win_key_up %04X %s\n", key, vk_name(key));
 #endif
 
   win_update_mouse();
+
+  if (key == last_key) {
+    if (
+        (cfg.compose_key == MDK_CTRL && key == VK_CONTROL) ||
+        (cfg.compose_key == MDK_SHIFT && key == VK_SHIFT) ||
+        (cfg.compose_key == MDK_ALT && key == VK_MENU)
+       )
+      comp_state = COMP_ACTIVE;
+  }
 
   if (alt_F2_pending) {
     if ((uint)wp == VK_F2) {
@@ -1111,6 +1251,7 @@ win_key_up(WPARAM wp, LPARAM unused(lp))
         buf[--pos] = alt_code;
       while (alt_code >>= 8);
       child_send(buf + pos, sizeof buf - pos);
+      compose_clear();
     }
     else if (alt_code < 0x10000) {
       wchar wc = alt_code;
@@ -1118,10 +1259,12 @@ win_key_up(WPARAM wp, LPARAM unused(lp))
         MultiByteToWideChar(CP_OEMCP, MB_USEGLYPHCHARS,
                             (char[]){wc}, 1, &wc, 1);
       child_sendw(&wc, 1);
+      compose_clear();
     }
     else {
       xchar xc = alt_code;
       child_sendw((wchar[]){high_surrogate(xc), low_surrogate(xc)}, 2);
+      compose_clear();
     }
   }
 

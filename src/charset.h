@@ -27,6 +27,8 @@ static inline xchar
 combine_surrogates(wchar hwc, wchar lwc)
 { return 0x10000 + ((hwc & 0x3FF) << 10) + (lwc & 0x3FF); }
 
+extern string getlocenvcat(string category);
+
 extern void cs_init(void);
 extern void cs_reconfig(void);
 
@@ -44,12 +46,14 @@ extern int cs_mbstowcs(wchar *ws, const char *s, size_t wlen);
 extern int cs_mb1towc(wchar *pwc, char c);
 extern wchar cs_btowc_glyph(char);
 
+extern bool nonascii(string s);
 extern char * cs__wcstombs(const wchar * ws);
 extern char * cs__wcstombs_dropill(const wchar * ws);
 extern char * cs__wcstoutf(const wchar * ws);
 extern wchar * cs__mbstowcs(const char * s);
 extern wchar * cs__utftowcs(const char * s);
 extern wchar * cs__utforansitowcs(const char * s);
+extern char * cs__utftombs(char * s);
 
 extern string locale_menu[];
 extern string charset_menu[];
@@ -157,6 +161,7 @@ extern int wcscmp(const wchar * s1, const wchar * s2);
 // needed for MinGW MSYS
 
 #define wcscpy(tgt, src) memcpy(tgt, src, (wcslen(src) + 1) * sizeof(wchar))
+#define wcscat(tgt, src) wcscpy(&tgt[wcslen(tgt)], src)
 extern wchar * wcschr(const wchar * s, wchar c);
 extern wchar * wcsrchr(const wchar * s, wchar c);
 extern int wcsncmp(const wchar * s1, const wchar * s2, int len);

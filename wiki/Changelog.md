@@ -1,3 +1,24 @@
+### 2.7.0 (13 Nov 2016) ###
+
+Character display:
+  * Check for misplaced underline by looking for underline only in descender section to decide whether to draw it ourselves (#604).
+  * New option UnderlineColour to set colour for all lining modes and enforce manual underlining (~#604).
+
+Terminal:
+  * Compose key.
+  * Workaround to enable Shift+space in modifyOtherKeys mode.
+  * Avoiding multiple device attribute reports (#606).
+  * Dynamic switching escape sequences for wide Indic and Extra characters (#553).
+
+Configuration:
+  * User interface localization (#537, #1).
+  * New option value -Rm to report system's monitor configuration (/#599).
+  * New option --wsl to enable WSL feature adaptations (mintty/wsltty/#8).
+  * Manual: fixed description of copy/paste shortcuts and refer to option CtrlExchangeShift (#602, #524).
+  * Case-insensitive lookup for X11 color names (#600).
+  * Dropped experimental options WideIndic and WideExtra in favour of dynamic switching escape sequences (/#553).
+  * Detection and graceful handling of corrupt font installation.
+
 ### 2.6.2 (9 Oct 2016) ###
 
 Terminal geometry:

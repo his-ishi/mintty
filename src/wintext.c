@@ -214,12 +214,18 @@ row_padding(int i, int e)
 }
 
 static void
-show_msg(wstring msg, wstring title)
+show_font_warning(char * msg)
 {
-  if (fprintf(stderr, "%ls", title) < 0 || fputs("\n", stderr) < 0 ||
-      fprintf(stderr, "%ls", msg) < 0 || fputs("\n", stderr) < 0 ||
-      fflush(stderr) < 0)
-    MessageBoxW(0, msg, title, MB_ICONWARNING);
+  char * fn = cs__wcstoutf(cfg.font.name);
+  char * fullmsg;
+  int len = asprintf(&fullmsg, "%s:\n%s", msg, fn);
+  free(fn);
+  if (len > 0) {
+    show_message(fullmsg, MB_ICONWARNING);
+    free(fullmsg);
+  }
+  else
+    show_message(msg, MB_ICONWARNING);
 }
 
 #ifndef TCI_SRCLOCALE
@@ -250,7 +256,7 @@ adjust_font_weights(void)
   if (wcslen(cfg.font.name) < lengthof(lf.lfFaceName))
     wcscpy(lf.lfFaceName, cfg.font.name);
   else
-    wcscpy(lf.lfFaceName, W("Lucida Console"));
+    wcscpy(lf.lfFaceName, W(""));
 #endif
   lf.lfPitchAndFamily = 0;
   //lf.lfCharSet = ANSI_CHARSET;   // report only ANSI character range
@@ -303,14 +309,14 @@ adjust_font_weights(void)
 
   // check if no font found
   if (!font_found) {
-    show_msg(_W("Font not found, using system substitute"), cfg.font.name);
+    show_font_warning(_("Font not found, using system substitute"));
     fw_norm = 400;
     fw_bold = 700;
     trace_font(("//\n"));
     return;
   }
   if (!ansi_found && !cs_found) {
-    show_msg(_W("Font has limited support for character ranges"), cfg.font.name);
+    show_font_warning(_("Font has limited support for character ranges"));
   }
 
   // find available widths closest to selected widths
@@ -383,6 +389,8 @@ win_init_fonts(int size)
 
   bold_mode = cfg.bold_as_font ? BOLD_FONT : BOLD_SHADOW;
   und_mode = UND_FONT;
+  if (cfg.underl_colour != (colour)-1)
+    und_mode = UND_LINE;
 
   if (cfg.font.weight) {
     fw_norm = cfg.font.weight;
@@ -426,6 +434,17 @@ win_init_fonts(int size)
 
   SelectObject(dc, fonts[FONT_NORMAL]);
   GetTextMetrics(dc, &tm);
+
+  if (!tm.tmHeight) {
+    // corrupt font installation (e.g. deleted font file)
+    show_font_warning(_("Font installation corrupt, using system substitute"));
+    wstrset(&cfg.font.name, W(""));
+    fonts[FONT_NORMAL] = create_font(fw_norm, false);
+    GetObject(fonts[FONT_NORMAL], sizeof (LOGFONT), &lfont);
+    SelectObject(dc, fonts[FONT_NORMAL]);
+    GetTextMetrics(dc, &tm);
+  }
+
   row_spacing = row_padding(tm.tmInternalLeading, tm.tmExternalLeading);
   trace_font(("h %ld asc %ld dsc %ld ild %ld eld %ld %ls\n", (long int)tm.tmHeight, (long int)tm.tmAscent, (long int)tm.tmDescent, (long int)tm.tmInternalLeading, (long int)tm.tmExternalLeading, cfg.font.name));
   row_spacing += cfg.row_spacing;
@@ -438,7 +457,7 @@ win_init_fonts(int size)
 #ifdef check_charset_only_for_returned_font
   int default_charset = get_default_charset();
   if (tm.tmCharSet != default_charset && default_charset != DEFAULT_CHARSET) {
-    show_msg(_W("Font does not support system locale"), cfg.font.name);
+    show_font_warning(_("Font does not support system locale"));
   }
 #endif
 
@@ -515,11 +534,9 @@ win_init_fonts(int size)
   * go all the way across the character cell, we only search
   * down a single column of the bitmap, half way across.)
   */
-  {
+  if (und_mode == UND_FONT) {
     HDC und_dc;
     HBITMAP und_bm, und_oldbm;
-    int i, gotit;
-    COLORREF c;
 
     und_dc = CreateCompatibleDC(dc);
     und_bm = CreateCompatibleBitmap(dc, cell_width, cell_height);
@@ -530,9 +547,15 @@ win_init_fonts(int size)
     SetBkColor(und_dc, RGB(0, 0, 0));
     SetBkMode(und_dc, OPAQUE);
     ExtTextOut(und_dc, 0, 0, ETO_OPAQUE, null, " ", 1, null);
-    gotit = false;
-    for (i = 0; i < cell_height; i++) {
-      c = GetPixel(und_dc, cell_width / 2, i);
+
+    bool gotit = false;
+    // look for font-generated underline in character cell
+    //int i = 0;
+    // look for font-generated underline in descender section only
+    int i = tm.tmAscent;
+    //int i = tm.tmAscent + 1;
+    for (; i < cell_height; i++) {
+      COLORREF c = GetPixel(und_dc, cell_width / 2, i);
       if (c != RGB(0, 0, 0))
         gotit = true;
     }
@@ -762,8 +785,6 @@ another_font(int fontno)
   printf("font [%02X]: %d (size %d) %d w%4d i%d u%d s%d\n", fontno, font_height * (1 + !!(fontno & FONT_HIGH)), font_size, x, w, i, u, s);
 #endif
   fonts[fontno] =
-    // workaround: remove effect of row_spacing from font creation;
-    // to be checked: usages of cell_height elsewhere
     CreateFontW(font_height * (1 + !!(fontno & FONT_HIGH)), x, 0, 0, w, i, u, s,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 get_font_quality(), FIXED_PITCH | FF_DONTCARE, cfg.font.name);
@@ -902,7 +923,7 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
     nfont |= FONT_UNDERLINE;
   if (attr.attr & ATTR_ITALIC)
     nfont |= FONT_ITALIC;
-  if (attr.attr & ATTR_STRIKEOUT)
+  if (attr.attr & ATTR_STRIKEOUT && cfg.underl_colour == (colour)-1)
     nfont |= FONT_STRIKEOUT;
   another_font(nfont);
 
@@ -1236,8 +1257,11 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
   if (uloff >= cell_height)
     uloff = cell_height - 1;
 
+  if (cfg.underl_colour != (colour)-1)
+    ul = cfg.underl_colour;
 #ifdef debug_underline
-  ul = 0x802020E0;
+  if (cfg.underl_colour == (colour)-1)
+    ul = 0x802020E0;
   if (lattr == LATTR_TOP)
     ul = 0x80E0E020;
   if (lattr == LATTR_BOT)
@@ -1263,6 +1287,18 @@ win_text(int x, int y, wchar *text, int len, cattr attr, int lattr, bool has_rtl
         MoveToEx(dc, x, y + uloff - l, null);
         LineTo(dc, x + len * char_width, y + uloff - l);
       }
+    }
+    oldpen = SelectObject(dc, oldpen);
+    DeleteObject(oldpen);
+  }
+
+ /* Strikeout */
+  if (attr.attr & ATTR_STRIKEOUT && cfg.underl_colour != (colour)-1) {
+    int soff = (descent + (row_spacing / 2)) * 2 / 3;
+    HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, ul));
+    for (int l = 0; l < line_width; l++) {
+      MoveToEx(dc, x, y + soff + l, null);
+      LineTo(dc, x + len * char_width, y + soff + l);
     }
     oldpen = SelectObject(dc, oldpen);
     DeleteObject(oldpen);

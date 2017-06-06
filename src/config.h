@@ -43,7 +43,7 @@ typedef struct {
 
 typedef struct {
   // Looks
-  colour fg_colour, bold_colour, bg_colour, cursor_colour;
+  colour fg_colour, bold_colour, bg_colour, cursor_colour, underl_colour;
   colour search_fg_colour, search_bg_colour, search_current_colour;
   wstring theme_file;
   string colour_scheme;
@@ -74,6 +74,7 @@ typedef struct {
   bool alt_fn_shortcuts;
   bool ctrl_shift_shortcuts;
   bool ctrl_exchange_shift;
+  char compose_key;
   string key_prtscreen;	// VK_SNAPSHOT
   string key_pause;	// VK_PAUSE
   string key_break;	// VK_CANCEL
@@ -96,6 +97,7 @@ typedef struct {
   char scrollbar;
   char scroll_mod;
   bool pgupdn_scroll;
+  string lang;
   string search_bar;
   // Terminal
   string term;
@@ -130,8 +132,6 @@ typedef struct {
   int col_spacing, row_spacing;
   int padding;
   bool handle_dpichanged;
-  bool wide_indic;
-  bool wide_extra;
   string word_chars;
   string word_chars_excl;
   colour ime_cursor_colour;
