@@ -34,6 +34,7 @@ const config default_cfg = {
   .bg_colour = 0x000000,
   .cursor_colour = 0xBFBFBF,
   .underl_colour = (colour)-1,
+  .underl_manual = false,
   .search_fg_colour = 0x000000,
   .search_bg_colour = 0x00DDDD,
   .search_current_colour = 0x0099DD,
@@ -48,6 +49,7 @@ const config default_cfg = {
   .font = {.name = W("Lucida Console"), .size = 9, .weight = 400, .isbold = false},
   .show_hidden_fonts = false,
   .font_smoothing = FS_DEFAULT,
+  .font_render = FR_TEXTOUT,
   .bold_as_font = -1,  // -1 means "the opposite of bold_as_colour"
   .bold_as_colour = true,
   .allow_blinking = false,
@@ -90,7 +92,7 @@ const config default_cfg = {
   .scrollback_lines = 10000,
   .scroll_mod = MDK_SHIFT,
   .pgupdn_scroll = false,
-  .lang = "",
+  .lang = W(""),
   .search_bar = "",
   // Terminal
   .term = "xterm",
@@ -152,7 +154,7 @@ const config default_cfg = {
 config cfg, new_cfg, file_cfg;
 
 typedef enum {
-  OPT_BOOL, OPT_MOD, OPT_TRANS, OPT_CURSOR, OPT_FONTSMOOTH,
+  OPT_BOOL, OPT_MOD, OPT_TRANS, OPT_CURSOR, OPT_FONTSMOOTH, OPT_FONTRENDER,
   OPT_MIDDLECLICK, OPT_RIGHTCLICK, OPT_SCROLLBAR, OPT_WINDOW, OPT_HOLD,
   OPT_INT, OPT_COLOUR, OPT_STRING, OPT_WSTRING,
   OPT_LEGACY = 16
@@ -176,6 +178,7 @@ options[] = {
   {"BoldColour", OPT_COLOUR, offcfg(bold_colour)},
   {"CursorColour", OPT_COLOUR, offcfg(cursor_colour)},
   {"UnderlineColour", OPT_COLOUR, offcfg(underl_colour)},
+  {"UnderlineManual", OPT_BOOL, offcfg(underl_manual)},
   {"SearchForegroundColour", OPT_COLOUR, offcfg(search_fg_colour)},
   {"SearchBackgroundColour", OPT_COLOUR, offcfg(search_bg_colour)},
   {"SearchCurrentColour", OPT_COLOUR, offcfg(search_current_colour)},
@@ -202,6 +205,7 @@ options[] = {
   {"AllowBlinking", OPT_BOOL, offcfg(allow_blinking)},
   {"Locale", OPT_STRING, offcfg(locale)},
   {"Charset", OPT_STRING, offcfg(charset)},
+  {"FontRender", OPT_FONTRENDER, offcfg(font_render)},
   {"OldFontMenu", OPT_BOOL, offcfg(old_fontmenu)},
 
   // Keys
@@ -244,7 +248,7 @@ options[] = {
   {"Scrollbar", OPT_SCROLLBAR, offcfg(scrollbar)},
   {"ScrollMod", OPT_MOD, offcfg(scroll_mod)},
   {"PgUpDnScroll", OPT_BOOL, offcfg(pgupdn_scroll)},
-  {"Language", OPT_STRING, offcfg(lang)},
+  {"Language", OPT_WSTRING, offcfg(lang)},
   {"SearchBar", OPT_STRING, offcfg(search_bar)},
 
   // Terminal
@@ -354,6 +358,11 @@ static opt_val
     {"none", FS_NONE},
     {"partial", FS_PARTIAL},
     {"full", FS_FULL},
+    {0, 0}
+  },
+  [OPT_FONTRENDER] = (opt_val[]) {
+    {"textout", FR_TEXTOUT},
+    {"uniscribe", FR_UNISCRIBE},
     {0, 0}
   },
   [OPT_MIDDLECLICK] = (opt_val[]) {
@@ -895,16 +904,25 @@ load_messages_file(char * textdbf)
 }
 
 static bool
-load_messages_lang(string lang)
+load_messages_lang_w(wstring lang, bool fallback)
 {
   if (lang) {
-    char * lf = asform("%s.po", lang);
-    wchar * wl = cs__utftowcs(lf);
-    free(lf);
+    wchar * wl = newn(wchar, wcslen(lang) + 4);
+    wcscpy(wl, lang);
+    if (fallback) {
+      wchar * _ = wcschr(wl, '_');
+      if (_) {
+        *_ = '\0';
+        // continue below
+      }
+      else
+        return false;
+    }
+    wcscat(wl, W(".po"));
     char * textdbf = get_resource_file(W("lang"), wl, false);
     free(wl);
 #ifdef debug_messages
-    printf("Trying to load messages from <%s>: <%s>\n", lang, textdbf);
+    printf("Trying to load messages from <%ls>: <%s>\n", lang, textdbf);
 #endif
     if (textdbf) {
       load_messages_file(textdbf);
@@ -915,16 +933,33 @@ load_messages_lang(string lang)
   return false;
 }
 
+static bool
+load_messages_lang(string lang, bool fallback)
+{
+  wchar * wlang = cs__utftowcs(lang);
+  bool res = load_messages_lang_w((wstring)wlang, fallback);
+  free(wlang);
+  return res;
+}
+
 static void
 load_messages(config * cfg_p)
 {
-  if (cfg_p->lang) {
+  if (cfg_p->lang) for (int fallback = false; fallback <= true; fallback++) {
+#ifdef debug_messages
+    printf("Loading localization <%ls> (fallback %d)\n", cfg_p->lang, fallback);
+#endif
     clear_messages();
-    if (strcmp(cfg_p->lang, "=") == 0)
-      (void)load_messages_lang(cfg_p->locale);
-    else if (strcmp(cfg_p->lang, "*") != 0)
-      (void)load_messages_lang(cfg_p->lang);
-    else {
+    if (wcscmp(cfg_p->lang, W("=")) == 0) {
+      if (load_messages_lang(cfg_p->locale, fallback))
+        return;
+    }
+    else if (wcscmp(cfg_p->lang, W("@")) == 0) {
+      // locale_menu[1] is transformed from GetUserDefaultUILanguage()
+      if (load_messages_lang(locale_menu[1], fallback))
+        return;
+    }
+    else if (wcscmp(cfg_p->lang, W("*")) == 0) {
       // determine UI language from environment
       char * lang = getenv("LANGUAGE");
       if (lang) {
@@ -933,7 +968,7 @@ load_messages(config * cfg_p)
           char * sep = strchr(lang, ':');
           if (sep)
             *sep = '\0';
-          if (load_messages_lang(lang))
+          if (load_messages_lang(lang, fallback))
             return;
           lang = sep;
           if (lang)
@@ -947,9 +982,14 @@ load_messages(config * cfg_p)
         char * dot = strchr(lang, '.');
         if (dot)
           *dot = '\0';
-        (void)load_messages_lang(lang);
+        if (load_messages_lang(lang, fallback))
+          return;
         free(lang);
       }
+    }
+    else {
+      if (load_messages_lang_w(cfg_p->lang, fallback))
+        return;
     }
   }
 }
@@ -1093,7 +1133,7 @@ init_config(void)
 void
 finish_config(void)
 {
-  if (*cfg.lang && (strcmp(cfg.lang, "=") != 0 || *cfg.locale))
+  if (*cfg.lang && (wcscmp(cfg.lang, W("=")) != 0 || *cfg.locale))
     load_messages(&cfg);
 #if defined(debug_messages) && debug_messages > 1
   else
@@ -1223,8 +1263,8 @@ apply_config(bool save)
   }
 
   copy_config("apply", &file_cfg, &new_cfg);
-  if (strcmp(new_cfg.lang, cfg.lang) != 0
-      || (strcmp(new_cfg.lang, "=") == 0 && new_cfg.locale != cfg.locale)
+  if (wcscmp(new_cfg.lang, cfg.lang) != 0
+      || (wcscmp(new_cfg.lang, W("=")) == 0 && new_cfg.locale != cfg.locale)
      )
     load_messages(&new_cfg);
   win_reconfig();  // copy_config(&cfg, &new_cfg);
@@ -1446,34 +1486,41 @@ charset_handler(control *ctrl, int event)
 static void
 lang_handler(control *ctrl, int event)
 {
-  const wstring NONE = _W("◇ None ◇");
-  const wstring LOCALE = _W("◆ conf. Locale ◆");
-  const wstring LOCENV = _W("◆ locale env. ◆");
+  //__ UI language
+  const wstring NONE = _W("– None –");
+  const wstring WINLOC = _W("@ Windows language @");
+  const wstring LOCENV = _W("* Locale environm. *");
+  const wstring LOCALE = _W("= cfg. Text Locale =");
   switch (event) {
     when EVENT_REFRESH:
       dlg_listbox_clear(ctrl);
       dlg_listbox_add_w(ctrl, NONE);
-      dlg_listbox_add_w(ctrl, LOCALE);
+      dlg_listbox_add_w(ctrl, WINLOC);
       dlg_listbox_add_w(ctrl, LOCENV);
+      dlg_listbox_add_w(ctrl, LOCALE);
       add_file_resources(ctrl, W("lang/*.po"));
-      if (strcmp(new_cfg.lang, "") == 0)
+      if (wcscmp(new_cfg.lang, W("")) == 0)
         dlg_editbox_set_w(ctrl, NONE);
-      else if (strcmp(new_cfg.lang, "=") == 0)
-        dlg_editbox_set_w(ctrl, LOCALE);
-      else if (strcmp(new_cfg.lang, "*") == 0)
+      else if (wcscmp(new_cfg.lang, W("@")) == 0)
+        dlg_editbox_set_w(ctrl, WINLOC);
+      else if (wcscmp(new_cfg.lang, W("*")) == 0)
         dlg_editbox_set_w(ctrl, LOCENV);
+      else if (wcscmp(new_cfg.lang, W("=")) == 0)
+        dlg_editbox_set_w(ctrl, LOCALE);
       else
-        dlg_editbox_set(ctrl, new_cfg.lang);
+        dlg_editbox_set_w(ctrl, new_cfg.lang);
     when EVENT_VALCHANGE or EVENT_SELCHANGE: {
       int n = dlg_listbox_getcur(ctrl);
       if (n == 0)
-        strset(&new_cfg.lang, "");
+        wstrset(&new_cfg.lang, W(""));
       else if (n == 1)
-        strset(&new_cfg.lang, "=");
+        wstrset(&new_cfg.lang, W("@"));
       else if (n == 2)
-        strset(&new_cfg.lang, "*");
+        wstrset(&new_cfg.lang, W("*"));
+      else if (n == 3)
+        wstrset(&new_cfg.lang, W("="));
       else
-        dlg_editbox_get(ctrl, &new_cfg.lang);
+        dlg_editbox_get_w(ctrl, &new_cfg.lang);
     }
   }
 }
@@ -1640,6 +1687,7 @@ download_scheme(char * url)
 static void
 theme_handler(control *ctrl, int event)
 {
+  //__ terminal theme / colour scheme
   const wstring NONE = _W("◇ None ◇");  // ♢◇
   const wstring CFG_NONE = W("");
   wstring theme_name = new_cfg.theme_file;
@@ -1831,7 +1879,7 @@ setup_config_box(controlbox * b)
  /*
   * The Looks panel.
   */
-  s = ctrl_new_set(b, "Looks", _("Looks in Terminal"), _("Colours"));
+  s = ctrl_new_set(b, _("Looks"), _("Looks in Terminal"), _("Colours"));
   ctrl_columns(s, 3, 33, 33, 33);
   ctrl_pushbutton(
     s, _("&Foreground..."), dlg_stdcolour_handler, &new_cfg.fg_colour
@@ -1852,7 +1900,7 @@ setup_config_box(controlbox * b)
   (store_button = ctrl_pushbutton(s, _("Store"), scheme_saver, 0))
     ->column = 1;
 
-  s = ctrl_new_set(b, "Looks", null, _("Transparency"));
+  s = ctrl_new_set(b, _("Looks"), null, _("Transparency"));
   bool with_glass = win_is_glass_available();
   ctrl_radiobuttons(
     s, null, 4 + with_glass,
@@ -1883,7 +1931,7 @@ setup_config_box(controlbox * b)
   );
 #endif
 
-  s = ctrl_new_set(b, "Looks", null, _("Cursor"));
+  s = ctrl_new_set(b, _("Looks"), null, _("Cursor"));
   ctrl_radiobuttons(
     s, null, 4 + with_glass,
     dlg_stdradiobutton_handler, &new_cfg.cursor_type,
@@ -1899,12 +1947,12 @@ setup_config_box(controlbox * b)
  /*
   * The Text panel.
   */
-  s = ctrl_new_set(b, "Text", _("Text and Font properties"), _("Font"));
+  s = ctrl_new_set(b, _("Text"), _("Text and Font properties"), _("Font"));
   ctrl_fontsel(
     s, null, dlg_stdfontsel_handler, &new_cfg.font
   );
 
-  s = ctrl_new_set(b, "Text", null, null);
+  s = ctrl_new_set(b, _("Text"), null, null);
   ctrl_columns(s, 2, 50, 50);
   ctrl_radiobuttons(
     s, _("Font smoothing"), 2,
@@ -1929,7 +1977,7 @@ setup_config_box(controlbox * b)
     dlg_stdcheckbox_handler, &new_cfg.allow_blinking
   )->column = 0;
 
-  s = ctrl_new_set(b, "Text", null, null);
+  s = ctrl_new_set(b, _("Text"), null, null);
   ctrl_columns(s, 2, 29, 71);
   (locale_box = ctrl_combobox(
     s, _("&Locale"), 100, locale_handler, 0
@@ -1941,7 +1989,7 @@ setup_config_box(controlbox * b)
  /*
   * The Keys panel.
   */
-  s = ctrl_new_set(b, "Keys", _("Keyboard features"), null);
+  s = ctrl_new_set(b, _("Keys"), _("Keyboard features"), null);
   ctrl_columns(s, 2, 50, 50);
   ctrl_checkbox(
     s, _("&Backarrow sends ^H"),
@@ -1956,7 +2004,7 @@ setup_config_box(controlbox * b)
     dlg_stdcheckbox_handler, &new_cfg.ctrl_alt_is_altgr
   );
 
-  s = ctrl_new_set(b, "Keys", null, _("Shortcuts"));
+  s = ctrl_new_set(b, _("Keys"), null, _("Shortcuts"));
   ctrl_checkbox(
     s, _("Cop&y and Paste (Ctrl/Shift+Ins)"),
     dlg_stdcheckbox_handler, &new_cfg.clip_shortcuts
@@ -1982,7 +2030,7 @@ setup_config_box(controlbox * b)
     dlg_stdcheckbox_handler, &new_cfg.ctrl_shift_shortcuts
   );
 
-  s = ctrl_new_set(b, "Keys", null, _("Compose key"));
+  s = ctrl_new_set(b, _("Keys"), null, _("Compose key"));
   ctrl_radiobuttons(
     s, null, 4,
     dlg_stdradiobutton_handler, &new_cfg.compose_key,
@@ -1996,7 +2044,7 @@ setup_config_box(controlbox * b)
  /*
   * The Mouse panel.
   */
-  s = ctrl_new_set(b, "Mouse", _("Mouse functions"), null);
+  s = ctrl_new_set(b, _("Mouse"), _("Mouse functions"), null);
   ctrl_columns(s, 2, 50, 50);
   ctrl_checkbox(
     s, _("Cop&y on select"),
@@ -2011,7 +2059,7 @@ setup_config_box(controlbox * b)
     dlg_stdcheckbox_handler, &new_cfg.clicks_place_cursor
   );
 
-  s = ctrl_new_set(b, "Mouse", null, _("Click actions"));
+  s = ctrl_new_set(b, _("Mouse"), null, _("Click actions"));
   ctrl_radiobuttons(
     s, _("Right mouse button"), 4,
     dlg_stdradiobutton_handler, &new_cfg.right_click_action,
@@ -2031,7 +2079,7 @@ setup_config_box(controlbox * b)
     null
   );
 
-  s = ctrl_new_set(b, "Mouse", null, _("Application mouse mode"));
+  s = ctrl_new_set(b, _("Mouse"), null, _("Application mouse mode"));
   ctrl_radiobuttons(
     s, _("Default click target"), 4,
     dlg_stdradiobutton_handler, &new_cfg.clicks_target_app,
@@ -2052,7 +2100,7 @@ setup_config_box(controlbox * b)
  /*
   * The Window panel.
   */
-  s = ctrl_new_set(b, "Window", _("Window properties"), _("Default size"));
+  s = ctrl_new_set(b, _("Window"), _("Window properties"), _("Default size"));
   ctrl_columns(s, 5, 35, 3, 28, 4, 30);
   (cols_box = ctrl_editbox(
     s, _("Colu&mns"), 44, dlg_stdintbox_handler, &new_cfg.cols
@@ -2064,7 +2112,7 @@ setup_config_box(controlbox * b)
     s, _("C&urrent size"), current_size_handler, 0
   )->column = 4;
 
-  s = ctrl_new_set(b, "Window", null, null);
+  s = ctrl_new_set(b, _("Window"), null, null);
   ctrl_columns(s, 2, 66, 34);
   ctrl_editbox(
     s, _("Scroll&back lines"), 50,
@@ -2092,8 +2140,8 @@ setup_config_box(controlbox * b)
     dlg_stdcheckbox_handler, &new_cfg.pgupdn_scroll
   );
 
-  s = ctrl_new_set(b, "Window", null, _("UI language"));
-  ctrl_columns(s, 2, 50, 50);
+  s = ctrl_new_set(b, _("Window"), null, _("UI language"));
+  ctrl_columns(s, 2, 60, 40);
   ctrl_combobox(
     s, null, 100, lang_handler, 0
   )->column = 0;
@@ -2101,7 +2149,7 @@ setup_config_box(controlbox * b)
  /*
   * The Terminal panel.
   */
-  s = ctrl_new_set(b, "Terminal", _("Terminal features"), null);
+  s = ctrl_new_set(b, _("Terminal"), _("Terminal features"), null);
   ctrl_columns(s, 2, 50, 50);
   ctrl_combobox(
     s, _("&Type"), 100, term_handler, 0
@@ -2110,7 +2158,7 @@ setup_config_box(controlbox * b)
     s, _("&Answerback"), 100, dlg_stdstringbox_handler, &new_cfg.answerback
   )->column = 1;
 
-  s = ctrl_new_set(b, "Terminal", null, _("Bell (sound overridden by Wave/BellFile or BellFreq)"));
+  s = ctrl_new_set(b, _("Terminal"), null, _("Bell (sound overridden by Wave/BellFile or BellFreq)"));
   ctrl_columns(s, 3, 36, 19, 45);
   ctrl_combobox(
     s, null, 100, bell_handler, 0
@@ -2136,7 +2184,7 @@ setup_config_box(controlbox * b)
     s, _("► &Play"), bell_tester, 0
   )->column = 1;
 
-  s = ctrl_new_set(b, "Terminal", null, _("Printer"));
+  s = ctrl_new_set(b, _("Terminal"), null, _("Printer"));
 #ifdef use_multi_listbox_for_printers
   ctrl_listbox(
     s, null, 4, 100, printer_handler, 0
@@ -2147,7 +2195,7 @@ setup_config_box(controlbox * b)
   );
 #endif
 
-  s = ctrl_new_set(b, "Terminal", null, null);
+  s = ctrl_new_set(b, _("Terminal"), null, null);
   ctrl_checkbox(
     s, _("&Prompt about running processes on close"),
     dlg_stdcheckbox_handler, &new_cfg.confirm_exit

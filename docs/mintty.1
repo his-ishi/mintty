@@ -606,7 +606,8 @@ the system ANSI encoding.
 command-line.)
 .br
 Unicode-enabled settings: BellFile, ThemeFile, Title, ExitTitle, Icon, Log, 
-Font, Printer, Answerback, Class, AppID, AppName, AppLaunchCmd, SixelClipChars.
+Language, Font, Printer, Answerback, SixelClipChars, 
+Class, AppID, AppName, AppLaunchCmd.
 
 Be careful when running multiple instances of mintty. If options are saved 
 from different instances, or the config file is edited manually, 
@@ -659,6 +660,13 @@ downloaded from the Color Scheme Configurator, or for theme files from the web
 (note that the program \fBcurl\fP needs to be installed for the latter option).
 See the Tips wiki page \fIhttps://github.com/mintty/mintty/wiki/Tips\fP 
 about this mechanism.
+
+.TP
+\fBText lines\fP (UnderlineManual=false)
+By setting this true, text attributes underline, doubly underline, strikeout and overline 
+are enforced to be drawn manually. 
+The default is to use Windows font variants for strikeout and for underline, 
+unless mintty detects that the underlined font would not display properly.
 
 .TP
 \fBTransparency\fP (Transparency=off)
@@ -781,6 +789,15 @@ Select the amount of font smoothing from the following choices:
 \(en \fBPartial\fP: Greyscale anti-aliasing.
 .br
 \(en \fBFull\fP: Subpixel anti-aliasing ("ClearType").
+
+.TP
+\fBFont rendering\fP (FontRender=textout)
+Select the rendering system used for text display:
+.br
+\(en \fBtextout\fP: Use the Windows ExtTextOut API.
+.br
+\(en \fBuniscribe\fP: Use the Windows Uniscribe API.
+This may become the default in a future version.
 
 .TP
 \fBLocale\fP (Locale=)
@@ -1070,14 +1087,21 @@ menus, message boxes, and terminal in-line error messages.
 .br
 \(en \fI(empty)\fP an empty entry disables localization
 .br
-\(en \fB=\fP use the same language as the \fBLocale\fP setting (section Text)
+\(en \fB@\fP use the Windows user language setting
 .br
 \(en \fB*\fP use environment settings (variables \fILANGUAGE\fP, \fILC_ALL\fP, \fILC_MESSAGES\fP, \fILANG\fP)
+.br
+\(en \fB=\fP use the same language as the \fBLocale\fP setting (section Text)
 .br
 \(en \fI(language[_region])\fP use the given language or language/region code
 
 See the Tips wiki page \fIhttps://github.com/mintty/mintty/wiki/Tips\fP 
 about how to configure localization.
+
+Note that Windows may already have localized the default entries of the 
+system menu, which makes the system menu language inconsistent because 
+mintty adds a few items here. Select \fILanguage=en\fP to 
+"reverse-localize" this.
 
 .SS Terminal
 Terminal emulation settings.
