@@ -52,7 +52,7 @@ const config default_cfg = {
   .font_sample = W(""),
   .show_hidden_fonts = false,
   .font_smoothing = FS_DEFAULT,
-  .font_render = FR_TEXTOUT,
+  .font_render = FR_UNISCRIBE,
   .bold_as_font = -1,  // -1 means "the opposite of bold_as_colour"
   .bold_as_colour = true,
   .allow_blinking = false,
@@ -100,6 +100,7 @@ const config default_cfg = {
   // Terminal
   .term = "xterm",
   .answerback = W(""),
+  .old_wrapmodes = false,
   .bell_sound = true,
   .bell_type = 1,
   .bell_file = W(""),
@@ -118,6 +119,7 @@ const config default_cfg = {
   .exit_title = W(""),
   .icon = W(""),
   .log = W(""),
+  .logging = true,
   .create_utmp = false,
   .title = W(""),
   .daemonize = true,
@@ -126,10 +128,13 @@ const config default_cfg = {
   .app_id = W(""),
   .app_name = W(""),
   .app_launch_cmd = W(""),
+  .drop_commands = W(""),
+  .user_commands = W(""),
   .col_spacing = 0,
   .row_spacing = 0,
   .padding = 1,
   .handle_dpichanged = true,
+  .check_version_update = 900,
   .word_chars = "",
   .word_chars_excl = "",
   .use_system_colours = false,
@@ -259,6 +264,7 @@ options[] = {
   // Terminal
   {"Term", OPT_STRING, offcfg(term)},
   {"Answerback", OPT_WSTRING, offcfg(answerback)},
+  {"OldWrapModes", OPT_BOOL, offcfg(old_wrapmodes)},
   {"BellSound", OPT_BOOL, offcfg(bell_sound)},
   {"BellType", OPT_INT, offcfg(bell_type)},
   {"BellFile", OPT_WSTRING, offcfg(bell_file)},
@@ -280,6 +286,7 @@ options[] = {
   {"ExitTitle", OPT_WSTRING, offcfg(exit_title)},
   {"Icon", OPT_WSTRING, offcfg(icon)},
   {"Log", OPT_WSTRING, offcfg(log)},
+  {"Logging", OPT_BOOL, offcfg(logging)},
   {"Title", OPT_WSTRING, offcfg(title)},
   {"Utmp", OPT_BOOL, offcfg(create_utmp)},
   {"Window", OPT_WINDOW, offcfg(window)},
@@ -290,10 +297,13 @@ options[] = {
   {"AppID", OPT_WSTRING, offcfg(app_id)},
   {"AppName", OPT_WSTRING, offcfg(app_name)},
   {"AppLaunchCmd", OPT_WSTRING, offcfg(app_launch_cmd)},
+  {"DropCommands", OPT_WSTRING, offcfg(drop_commands)},
+  {"UserCommands", OPT_WSTRING, offcfg(user_commands)},
   {"ColSpacing", OPT_INT, offcfg(col_spacing)},
   {"RowSpacing", OPT_INT, offcfg(row_spacing)},
   {"Padding", OPT_INT, offcfg(padding)},
   {"HandleDPI", OPT_BOOL, offcfg(handle_dpichanged)},
+  {"CheckVersionUpdate", OPT_INT, offcfg(check_version_update)},
   {"WordChars", OPT_STRING, offcfg(word_chars)},
   {"WordCharsExcl", OPT_STRING, offcfg(word_chars_excl)},
   {"IMECursorColour", OPT_COLOUR, offcfg(ime_cursor_colour)},
@@ -1074,20 +1084,39 @@ load_config(string filename, bool to_save)
 
   if (file) {
     while (fgets(linebuf, sizeof linebuf, file)) {
-      linebuf[strcspn(linebuf, "\r\n")] = 0;  /* trim newline */
-      if (linebuf[0] == '#' || linebuf[0] == '\0') {
+      char * lbuf = linebuf;
+      while (!strchr(lbuf, '\n')) {
+        if (lbuf == linebuf) {
+          // make lbuf dynamic
+          lbuf = strdup(lbuf);
+        }
+        // append to lbuf
+        int len = strlen(lbuf);
+        lbuf = renewn(lbuf, len + sizeof linebuf);
+        if (!fgets(&lbuf[len], sizeof linebuf, file))
+          break;
+      }
+
+      //lbuf[strcspn(lbuf, "\r\n")] = 0;  /* trim newline */
+      // trim newline but allow embedded CR (esp. for DropCommands)
+      lbuf[strcspn(lbuf, "\n")] = 0;
+      // preserve comment lines and empty lines
+      if (lbuf[0] == '#' || lbuf[0] == '\0') {
         if (to_save)
-          remember_file_comment(linebuf);
+          remember_file_comment(lbuf);
       }
       else {
-        int i = parse_option(linebuf, true);
+        int i = parse_option(lbuf, true);
         if (to_save) {
           if (i >= 0)
             remember_file_option("load", i);
           else
-            remember_file_comment(linebuf);
+            // preserve unknown options as comment lines
+            remember_file_comment(lbuf);
         }
       }
+      if (lbuf != linebuf)
+        free(lbuf);
     }
     fclose(file);
   }
@@ -1354,7 +1383,8 @@ closemuicache()
 }
 
 static wchar *
-getreg(HKEY key, wchar * subkey, wchar * attribute) {
+getreg(HKEY key, wchar * subkey, wchar * attribute)
+{
 #if CYGWIN_VERSION_API_MINOR < 74
   (void)key;
   (void)subkey;
@@ -1376,7 +1406,8 @@ getreg(HKEY key, wchar * subkey, wchar * attribute) {
 }
 
 static wchar *
-muieventlabel(wchar * event) {
+muieventlabel(wchar * event)
+{
   // HKEY_CURRENT_USER\AppEvents\EventLabels\SystemAsterisk
   // DispFileName -> "@mmres.dll,-5843"
   wchar * rsr = getreg(evlabels, event, W("DispFileName"));

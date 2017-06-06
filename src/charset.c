@@ -6,6 +6,7 @@
 #include "charset.h"
 
 #include "config.h"
+#include "child.h"  // child_update_charset
 
 #if HAS_LOCALES
 #include <locale.h>
@@ -274,6 +275,8 @@ update_mode(void)
 
   // Clear output conversion state.
   cs_mb1towc(0, 0);
+
+  child_update_charset();
 }
 
 void

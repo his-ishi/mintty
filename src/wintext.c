@@ -22,8 +22,9 @@ enum {
   FONT_ITALIC    = 0x04,
   FONT_STRIKEOUT = 0x08,
   FONT_HIGH      = 0x10,
-  FONT_WIDE      = 0x20,
-  FONT_NARROW    = 0x40,
+  FONT_ZOOMFULL  = 0x20,
+  FONT_WIDE      = 0x40,
+  FONT_NARROW    = 0x80,
   FONT_MAXNO     = FONT_WIDE + FONT_NARROW
 };
 
@@ -32,7 +33,7 @@ static HFONT fonts[FONT_MAXNO];
 static bool fontflag[FONT_MAXNO];
 static int fw_norm = FW_NORMAL;
 static int fw_bold = FW_BOLD;
-static int row_spacing;
+int row_spacing;
 
 enum {LDRAW_CHAR_NUM = 31, LDRAW_CHAR_TRIES = 4};
 
@@ -79,8 +80,8 @@ static const wchar linedraw_chars[LDRAW_CHAR_NUM][LDRAW_CHAR_TRIES] = {
   {0x00B7, '.'},                   // 0x7E '~' Centered dot
 };
 
-static enum {/*unused*/BOLD_NONE, BOLD_SHADOW, BOLD_FONT} bold_mode;
-static enum {UND_LINE, UND_FONT} und_mode;
+BOLD_MODE bold_mode;
+UND_MODE und_mode;
 static int descent;
 
 // Current font size (with any zooming)
@@ -96,6 +97,10 @@ bool font_ambig_wide;
 
 COLORREF colours[COLOUR_NUM];
 static bool bold_colour_selected = false;
+
+// Diagnostic information
+bool show_charinfo = false;
+
 
 static uint
 colour_dist(colour a, colour b)
@@ -162,7 +167,8 @@ brighten(colour c, colour against)
 }
 
 static uint
-get_font_quality(void) {
+get_font_quality(void)
+{
   return
     (uchar[]){
       [FS_DEFAULT] = DEFAULT_QUALITY,
@@ -200,7 +206,8 @@ create_font(int weight, bool underline)
 static int
 row_padding(int i, int e)
 {
-  // may look nicer; used to break box characters
+  // may look nicer; used to break box characters; for background discussion,
+  // see https://github.com/mintty/mintty/issues/631#issuecomment-279690468
   static bool allow_add_font_padding = true;
 
   if (i == 0 && e == 0)
@@ -468,7 +475,7 @@ win_init_fonts(int size)
   row_spacing += cfg.row_spacing;
   if (row_spacing < -tm.tmDescent)
     row_spacing = -tm.tmDescent;
-    trace_font(("row spacing int %ld ext %ld -> %+d; add %+d -> %+d; desc %ld -> %+d %ls\n", 
+  trace_font(("row spacing int %ld ext %ld -> %+d; add %+d -> %+d; desc %ld -> %+d %ls\n", 
       (long int)tm.tmInternalLeading, (long int)tm.tmExternalLeading, row_padding(tm.tmInternalLeading, tm.tmExternalLeading),
       cfg.row_spacing, row_padding(tm.tmInternalLeading, tm.tmExternalLeading) + cfg.row_spacing,
       (long int)tm.tmDescent, row_spacing, cfg.font.name));
@@ -699,12 +706,207 @@ win_paint(void)
 
 #define dont_debug_cursor 1
 
+static struct charnameentry {
+  xchar uc;
+  string un;
+} * charnametable = null;
+static int charnametable_len = 0;
+static int charnametable_alloced = 0;
+
+static void
+init_charnametable()
+{
+  if (charnametable)
+    return;
+
+  void add_charname(uint cc, char * cn) {
+    if (charnametable_len >= charnametable_alloced) {
+      charnametable_alloced += 999;
+      if (!charnametable)
+        charnametable = newn(struct charnameentry, charnametable_alloced);
+      else
+        charnametable = renewn(charnametable, charnametable_alloced);
+    }
+
+    charnametable[charnametable_len].uc = cc;
+    charnametable[charnametable_len].un = strdup(cn);
+    charnametable_len++;
+  }
+
+  char * cnfn = get_resource_file(W("info"), W("charnames.txt"), false);
+  FILE * cnf = fopen(cnfn, "r");
+  if (cnf) {
+    uint cc;
+    char cn[100];
+    while (fscanf(cnf, "%X %[- A-Z0-9]", &cc, cn) == 2) {
+      add_charname(cc, cn);
+    }
+    fclose(cnf);
+  }
+  else {
+    cnf = fopen("/usr/share/unicode/ucd/UnicodeData.txt", "r");
+    if (!cnf)
+      return;
+    FILE * crf = fopen("/usr/share/unicode/ucd/NameAliases.txt", "r");
+    uint ccorr = 0;
+    char buf[100];
+    char nbuf[100];
+    while (fgets(buf, sizeof(buf), cnf)) {
+      uint cc;
+      char cn[99];
+      if (sscanf(buf, "%X;%[- A-Z0-9];", &cc, cn) == 2) {
+        //0020;SPACE;Zs;0;WS;;;;;N;;;;;
+        if (crf) {
+          while (ccorr < cc && fgets(nbuf, sizeof(nbuf), crf)) {
+            sscanf(nbuf, "%X;", &ccorr);
+          }
+          if (ccorr == cc && strstr(nbuf, ";correction")) {
+            //2118;WEIERSTRASS ELLIPTIC FUNCTION;correction
+            sscanf(nbuf, "%X;%[- A-Z0-9];", &ccorr, cn);
+          }
+        }
+        add_charname(cc, cn);
+      }
+    }
+    fclose(cnf);
+    if (crf)
+      fclose(crf);
+  }
+}
+
+static char *
+charname(xchar ucs)
+{
+  // binary search in table
+  int min = 0;
+  int max = charnametable_len - 1;
+  int mid;
+  while (max >= min) {
+    unsigned long midu;
+    unsigned char * mide;
+    mid = (min + max) / 2;
+    mide = (unsigned char *) charnametable[mid].un;
+    midu = charnametable[mid].uc;
+    if (midu < ucs) {
+      min = mid + 1;
+    } else if (midu > ucs) {
+      max = mid - 1;
+    } else {
+      return (char *) mide;
+    }
+  }
+  return "";
+}
+
+void
+toggle_charinfo()
+{
+  show_charinfo = !show_charinfo;
+}
+
+static void
+show_curchar_info(char tag)
+{
+  if (!show_charinfo)
+    return;
+  init_charnametable();
+  (void)tag;
+  static termchar * pp = 0;
+  static termchar prev; // = (termchar) {.cc_next = 0, .chr = 0, .attr = CATTR_DEFAULT};
+
+  void show_char_msg(char * cs) {
+    static char * prev = null;
+    if (!prev || 0 != strcmp(cs, prev)) {
+      //printf("[%c]%s\n", tag, cs);
+      SetWindowTextA(wnd, cs);
+    }
+    if (prev)
+      free(prev);
+    prev = cs;
+  }
+
+  void show_char_info(termchar * cpoi) {
+    // return if base character same as previous and no combining chars
+    if (cpoi == pp && cpoi && cpoi->chr == prev.chr && !cpoi->cc_next)
+      return;
+
+    char * cs = strdup("");
+
+    pp = cpoi;
+    if (cpoi) {
+      prev = *cpoi;
+
+      char * cn = strdup("");
+
+      xchar chbase = 0;
+#ifdef show_only_1_charname
+      bool combined = false;
+#endif
+      // show char codes
+      while (cpoi) {
+        cs = renewn(cs, strlen(cs) + 8 + 1);
+        char * cp = &cs[strlen(cs)];
+        xchar ci;
+        if (is_high_surrogate(cpoi->chr) && cpoi->cc_next && is_low_surrogate((cpoi + cpoi->cc_next)->chr)) {
+          ci = combine_surrogates(cpoi->chr, (cpoi + cpoi->cc_next)->chr);
+          sprintf(cp, "U+%05X ", ci);
+          cpoi += cpoi->cc_next;
+        }
+        else {
+          ci = cpoi->chr;
+          sprintf(cp, "U+%04X ", ci);
+        }
+        if (!chbase)
+          chbase = ci;
+        char * cni = charname(ci);
+        if (cni && *cni) {
+          cn = renewn(cn, strlen(cn) + strlen(cni) + 4);
+          sprintf(&cn[strlen(cn)], "| %s ", cni);
+        }
+
+        if (cpoi->cc_next) {
+#ifdef show_only_1_charname
+          combined = true;
+#endif
+          cpoi += cpoi->cc_next;
+        }
+        else
+          cpoi = null;
+      }
+#ifdef show_only_1_charname
+      char * cn = charname(chbase);
+      char * extra = combined ? " combined..." : "";
+      cs = renewn(cs, strlen(cs) + strlen(cn) + strlen(extra) + 1);
+      sprintf(&cs[strlen(cs)], "%s%s", cn, extra);
+#else
+      cs = renewn(cs, strlen(cs) + strlen(cn) + 1);
+      sprintf(&cs[strlen(cs)], "%s", cn);
+      free(cn);
+#endif
+    }
+
+    show_char_msg(cs);  // does free(cs);
+  }
+
+  int line = term.curs.y - term.disptop;
+  if (line < 0 || line >= term.rows) {
+    show_char_info(null);
+  }
+  else {
+    termline * displine = term.displines[line];
+    termchar * dispchar = &displine->chars[term.curs.x];
+    show_char_info(dispchar);
+  }
+}
+
+
 static void
 do_update(void)
 {
 #if defined(debug_cursor) && debug_cursor > 1
   printf("do_update cursor_on %d @%d,%d\n", term.cursor_on, term.curs.y, term.curs.x);
 #endif
+  show_curchar_info('u');
   if (update_state == UPDATE_BLOCKED) {
     update_state = UPDATE_IDLE;
     return;
@@ -772,6 +974,7 @@ win_schedule_update(void)
   update_state = UPDATE_PENDING;
 }
 
+
 static void
 another_font(int fontno)
 {
@@ -803,12 +1006,17 @@ another_font(int fontno)
     s = true;
   if (fontno & FONT_UNDERLINE)
     u = true;
+  int y = font_height * (1 + !!(fontno & FONT_HIGH));
+  if (fontno & FONT_ZOOMFULL) {
+    y = cell_height;
+    x = cell_width;
+  }
 
 #ifdef debug_create_font
   printf("font [%02X]: %d (size %d) %d w%4d i%d u%d s%d\n", fontno, font_height * (1 + !!(fontno & FONT_HIGH)), font_size, x, w, i, u, s);
 #endif
   fonts[fontno] =
-    CreateFontW(font_height * (1 + !!(fontno & FONT_HIGH)), x, 0, 0, w, i, u, s,
+    CreateFontW(y, x, 0, 0, w, i, u, s,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 get_font_quality(), FIXED_PITCH | FF_DONTCARE, cfg.font.name);
 
@@ -933,6 +1141,7 @@ void
 win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int lattr, bool has_rtl)
 {
   trace_line("win_text:", text, len);
+
   lattr &= LATTR_MODE;
   int char_width = cell_width * (1 + (lattr != LATTR_NORM));
 
@@ -974,6 +1183,8 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int la
   if (attr.attr & ATTR_STRIKEOUT
       && !cfg.underl_manual && cfg.underl_colour == (colour)-1)
     nfont |= FONT_STRIKEOUT;
+  if (attr.attr & TATTR_ZOOMFULL)
+    nfont |= FONT_ZOOMFULL;
   another_font(nfont);
 
   bool force_manual_underline = false;
@@ -1045,11 +1256,11 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int la
   bool has_cursor = attr.attr & (TATTR_ACTCURS | TATTR_PASCURS);
   colour cursor_colour = 0;
 
-  if (attr.attr & TATTR_CURRESULT) {
+  if (attr.attr & (TATTR_CURRESULT | TATTR_CURMARKED)) {
     bg = cfg.search_current_colour;
     fg = cfg.search_fg_colour;
   }
-  else if (attr.attr & TATTR_RESULT) {
+  else if (attr.attr & (TATTR_RESULT | TATTR_MARKED)) {
     bg = cfg.search_bg_colour;
     fg = cfg.search_fg_colour;
   }
@@ -1225,6 +1436,10 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int la
  /* Begin text output */
   int yt = y + (row_spacing / 2) - (lattr == LATTR_BOT ? cell_height : 0);
   int xt = x + (cfg.col_spacing / 2);
+  if (attr.attr & TATTR_ZOOMFULL) {
+    yt -= row_spacing / 2;
+    xt = x;
+  }
 
  /* Determine shadow/overstrike bold or double-width/height width */
   int xwidth = 1;
@@ -1477,6 +1692,7 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int la
     DeleteObject(oldpen);
   }
 
+  show_curchar_info('w');
   if (has_cursor) {
 #if defined(debug_cursor) && debug_cursor > 1
     printf("painting cursor_type '%c' cursor_on %d\n", "?b_l"[term_cursor_type()+1], term.cursor_on);
@@ -1654,6 +1870,13 @@ win_set_colour(colour_i i, colour c)
       else
         colours[BOLD_FG_COLOUR_I] = brighten(colours[FG_COLOUR_I], colours[BG_COLOUR_I]);
     }
+    else if (i == FG_COLOUR_I)
+      colours[i] = cfg.fg_colour;
+    else if (i == BG_COLOUR_I)
+      colours[i] = cfg.bg_colour;
+    else if (i == CURSOR_COLOUR_I)
+      colours[i] = cfg.cursor_colour;
+
     return;
   }
   colours[i] = c;

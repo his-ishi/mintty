@@ -30,9 +30,8 @@ extern void win_bell(config *);
 extern void win_set_title(char *);
 extern void win_save_title(void);
 extern void win_restore_title(void);
-extern void win_prefix_title(const wstring);
-extern void win_unprefix_title(const wstring);
 extern void win_copy_title(void);
+extern char * win_get_title(void);
 extern void win_copy_text(const char *s);
 
 extern colour win_get_colour(colour_i);
@@ -54,7 +53,7 @@ extern bool win_is_iconic(void);
 extern void win_get_pos(int *xp, int *yp);
 extern void win_get_pixels(int *height_p, int *width_p);
 extern void win_get_screen_chars(int *rows_p, int *cols_p);
-extern void win_popup_menu(void);
+extern void win_popup_menu(mod_keys mods);
 
 extern void win_zoom_font(int, bool sync_size_with_font);
 extern void win_set_font_size(int, bool sync_size_with_font);

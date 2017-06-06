@@ -134,6 +134,16 @@ load_dwm_funcs(void)
   }
 }
 
+void *
+load_library_func(string lib, string func)
+{
+  HMODULE hm = load_sys_library(lib);
+  if (hm)
+    return GetProcAddress(hm, func);
+  return 0;
+}
+
+
 #define dont_debug_dpi
 
 bool per_monitor_dpi_aware = false;
@@ -258,7 +268,17 @@ win_copy_title(void)
   win_copy(title, 0, len + 1);
 }
 
-void win_copy_text(const char *s)
+char *
+win_get_title(void)
+{
+  int len = GetWindowTextLengthW(wnd);
+  wchar title[len + 1];
+  GetWindowTextW(wnd, title, len + 1);
+  return cs__wcstombs(title);
+}
+
+void
+win_copy_text(const char *s)
 {
   unsigned int size;
   wchar *text = cs__mbstowcs(s);
@@ -336,7 +356,8 @@ win_restore_title(void)
 static HWND first_wnd, last_wnd;
 
 static BOOL CALLBACK
-wnd_enum_proc(HWND curr_wnd, LPARAM unused(lp)) {
+wnd_enum_proc(HWND curr_wnd, LPARAM unused(lp))
+{
   if (curr_wnd != wnd && !IsIconic(curr_wnd)) {
     WINDOWINFO curr_wnd_info;
     curr_wnd_info.cbSize = sizeof(WINDOWINFO);
@@ -624,14 +645,14 @@ win_is_glass_available(void)
 }
 
 static void
-update_blur(void)
+win_update_blur(bool opaque)
 {
 // This feature is disabled in config.c as it does not seem to work,
 // see https://github.com/mintty/mintty/issues/501
   if (pDwmEnableBlurBehindWindow) {
     bool blur =
       cfg.transparency && cfg.blurred && !win_is_fullscreen &&
-      !(cfg.opaque_when_focused && term.has_focus);
+      !(opaque && term.has_focus);
 #define dont_use_dwmapi_h
 #ifdef use_dwmapi_h
 #warning dwmapi_include_shown_for_documentation
@@ -656,12 +677,12 @@ update_blur(void)
 }
 
 static void
-update_glass(void)
+win_update_glass(bool opaque)
 {
   if (pDwmExtendFrameIntoClientArea) {
     bool enabled =
       cfg.transparency == TR_GLASS && !win_is_fullscreen &&
-      !(cfg.opaque_when_focused && term.has_focus);
+      !(opaque && term.has_focus);
     pDwmExtendFrameIntoClientArea(wnd, &(MARGINS){enabled ? -1 : 0, 0, 0, 0});
   }
 }
@@ -680,7 +701,7 @@ make_fullscreen(void)
   SetWindowLong(wnd, GWL_STYLE, style);
 
  /* The glass effect doesn't work for fullscreen windows */
-  update_glass();
+  win_update_glass(cfg.opaque_when_focused);
 
  /* Resize ourselves to exactly cover the nearest monitor. */
   MONITORINFO mi;
@@ -697,7 +718,7 @@ static void
 clear_fullscreen(void)
 {
   win_is_fullscreen = false;
-  update_glass();
+  win_update_glass(cfg.opaque_when_focused);
 
  /* Reinstate the window furniture. */
   LONG style = GetWindowLong(wnd, GWL_STYLE);
@@ -1083,8 +1104,8 @@ default_size(void)
   win_set_chars(cfg.rows, cfg.cols);
 }
 
-static void
-update_transparency(void)
+void
+win_update_transparency(bool opaque)
 {
   int trans = cfg.transparency;
   if (trans == TR_GLASS)
@@ -1093,13 +1114,13 @@ update_transparency(void)
   style = trans ? style | WS_EX_LAYERED : style & ~WS_EX_LAYERED;
   SetWindowLong(wnd, GWL_EXSTYLE, style);
   if (trans) {
-    if (cfg.opaque_when_focused && term.has_focus)
+    if (opaque && term.has_focus)
       trans = 0;
     SetLayeredWindowAttributes(wnd, 0, 255 - (uchar)trans, LWA_ALPHA);
   }
 
-  update_blur();
-  update_glass();
+  win_update_blur(opaque);
+  win_update_glass(opaque);
 }
 
 void
@@ -1127,7 +1148,7 @@ font_cs_reconfig(bool font_changed)
     win_adapt_term_size(true, false);
   }
   win_update_scrollbar();
-  update_transparency();
+  win_update_transparency(cfg.opaque_when_focused);
   win_update_mouse();
 
   bool old_ambig_wide = cs_ambig_wide;
@@ -1345,9 +1366,16 @@ static struct {
         }
       printf("                           %04X %s\n", (int)wp, idm_name);
 # endif
+      if ((wp & ~0xF) >= IDM_USERCOMMAND)
+        user_command(wp - IDM_USERCOMMAND);
+      else
       switch (wp & ~0xF) {  /* low 4 bits reserved to Windows */
         when IDM_OPEN: term_open();
         when IDM_COPY: term_copy();
+        when IDM_COPASTE: term_copy(); win_paste();
+        when IDM_CLRSCRLBCK: term_clear_scrollback(); term.disptop = 0;
+        when IDM_TOGLOG: toggle_logging();
+        when IDM_TOGCHARINFO: toggle_charinfo();
         when IDM_PASTE: win_paste();
         when IDM_SELALL: term_select_all(); win_update();
         when IDM_RESET: winimgs_clear(); term_reset(); win_update();
@@ -1385,6 +1413,9 @@ static struct {
       }
     }
 
+    when WM_APP:
+      update_available_version(wp);
+
     when WM_VSCROLL:
       switch (LOWORD(wp)) {
         when SB_BOTTOM:   term_scroll(-1, 0);
@@ -1393,6 +1424,8 @@ static struct {
         when SB_LINEUP:   term_scroll(0, -1);
         when SB_PAGEDOWN: term_scroll(0, +max(1, term.rows - 1));
         when SB_PAGEUP:   term_scroll(0, -max(1, term.rows - 1));
+        when SB_PRIOR:    term_scroll(SB_PRIOR, 0);
+        when SB_NEXT:     term_scroll(SB_NEXT, 0);
         when SB_THUMBPOSITION or SB_THUMBTRACK: {
           SCROLLINFO info;
           info.cbSize = sizeof(SCROLLINFO);
@@ -1486,7 +1519,7 @@ static struct {
       } else {
         term_set_focus(false, true);
       }
-      update_transparency();
+      win_update_transparency(cfg.opaque_when_focused);
       win_key_reset();
 
     when WM_SETFOCUS:
@@ -1505,6 +1538,10 @@ static struct {
       win_update();
 
     when WM_INITMENU:
+      // win_update_menus is already called before calling TrackPopupMenu
+      // which is supposed to initiate this message;
+      // however, if we skip the call here, the "New" item will 
+      // not be initialised !?!
       win_update_menus();
       return 0;
 
@@ -1763,8 +1800,9 @@ print_error(string msg)
 static void
 option_error(char * msg, char * option)
 {
+  finish_config();  // ensure localized message
   // msg is in UTF-8, option is in current encoding
-  char * optmsg = opterror_msg(msg, false, option, null);
+  char * optmsg = opterror_msg(_(msg), false, option, null);
   char * fullmsg = asform("%s\n%s", optmsg, _("Try '--help' for more information"));
   show_message(fullmsg, MB_ICONWARNING);
   exit(1);
@@ -2085,7 +2123,7 @@ static char help[] =
   "If a dash is given instead of a program, invoke the shell as a login shell.\n"
   "\n"
   "Options:\n"
-///12345678901234567890123456789012345678901234567890123456789012345678901234567890
+// 12345678901234567890123456789012345678901234567890123456789012345678901234567890
   "  -c, --config FILE     Load specified config file (cf. -C or -o ThemeFile)\n"
   "  -e, --exec ...        Treat remaining arguments as the command to execute\n"
   "  -h, --hold never|start|error|always  Keep window open after command finishes\n"
@@ -2101,7 +2139,7 @@ static char help[] =
   "      --nobidi|--nortl  Disable bidi (right-to-left support)\n"
   "  -o, --option OPT=VAL  Set/Override config file option with given value\n"
   "  -B, --Border frame|void  Use thin/no window border\n"
-  "  -R, --Reportpos s|o   Report window position (short/long) after exit\n"
+  "  -R, --Report s|o      Report window position (short/long) after exit\n"
   "      --nopin           Make this instance not pinnable to taskbar\n"
   "  -D, --daemon          Start new instance with Windows shortcut key\n"
   "  -H, --help            Display help and exit\n"
@@ -2119,6 +2157,7 @@ opts[] = {
   {"hold",       required_argument, 0, 'h'},
   {"icon",       required_argument, 0, 'i'},
   {"log",        required_argument, 0, 'l'},
+  {"logfile",    required_argument, 0, ''},
   {"utmp",       no_argument,       0, 'u'},
   {"option",     required_argument, 0, 'o'},
   {"position",   required_argument, 0, 'p'},
@@ -2238,6 +2277,7 @@ main(int argc, char *argv[])
       when 'h': set_arg_option("Hold", optarg);
       when 'i': set_arg_option("Icon", optarg);
       when 'l': set_arg_option("Log", optarg);
+      when '': set_arg_option("Log", optarg); set_arg_option("Logging", "0");
       when 'o': parse_arg_option(optarg);
       when 'p':
         if (strcmp(optarg, "center") == 0 || strcmp(optarg, "centre") == 0)
@@ -2255,7 +2295,7 @@ main(int argc, char *argv[])
         else if (sscanf(optarg, "%i,%i%1s", &cfg.x, &cfg.y, (char[2]){}) == 2)
           ;
         else
-          option_error(_("Syntax error in position argument '%s'"), optarg);
+          option_error(__("Syntax error in position argument '%s'"), optarg);
       when 's':
         if (strcmp(optarg, "maxwidth") == 0)
           maxwidth = true;
@@ -2266,7 +2306,7 @@ main(int argc, char *argv[])
         else if (sscanf(optarg, "%ux%u%1s", &cfg.cols, &cfg.rows, (char[2]){}) == 2)
           ;
         else
-          option_error(_("Syntax error in size argument '%s'"), optarg);
+          option_error(__("Syntax error in size argument '%s'"), optarg);
       when 't': set_arg_option("Title", optarg);
       when 'T':
         set_arg_option("Title", optarg);
@@ -2306,12 +2346,14 @@ main(int argc, char *argv[])
       when 'D':
         cfg.daemonize_always = true;
       when 'H': {
+        finish_config();  // ensure localized message
         char * helptext = asform("%s %s %s\n\n%s", _(usage), APPNAME, _(synopsis), _(help));
         show_info(helptext);
         free(helptext);
         return 0;
       }
       when 'V': {
+        finish_config();  // ensure localized message
         char * vertext =
           asform("%s\n%s\n%s\n%s\n", 
                  VERSION_TEXT, COPYRIGHT, LICENSE_TEXT, _(WARRANTY_TEXT));
@@ -2320,9 +2362,9 @@ main(int argc, char *argv[])
         return 0;
       }
       when '?':
-        option_error(_("Unknown option '%s'"), optopt ? shortopt : longopt);
+        option_error(__("Unknown option '%s'"), optopt ? shortopt : longopt);
       when ':':
-        option_error(_("Option '%s' requires an argument"),
+        option_error(__("Option '%s' requires an argument"),
                      longopt[1] == '-' ? longopt : shortopt);
     }
   }
@@ -2716,7 +2758,7 @@ main(int argc, char *argv[])
   // Initialise various other stuff.
   win_init_drop_target();
   win_init_menus();
-  update_transparency();
+  win_update_transparency(cfg.opaque_when_focused);
 
 #ifdef debug_display_monitors_mockup
 #define report_moni true

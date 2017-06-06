@@ -8,6 +8,8 @@
 #include <wingdi.h>
 #include <winuser.h>
 #include <imm.h>
+#define SB_PRIOR 100
+#define SB_NEXT 101
 
 extern HINSTANCE inst;  // The all-important instance handle
 extern HWND wnd;        // the main terminal window
@@ -21,6 +23,14 @@ extern LOGFONT lfont;
 extern int font_size;  // logical font size, as configured (< 0: pixel size)
 extern int cell_width, cell_height;  // includes spacing
 extern int PADDING;
+extern bool show_charinfo;
+extern void toggle_charinfo(void);
+// for display in Options – Font:
+extern int row_spacing;
+typedef enum {BOLD_SHADOW, BOLD_FONT} BOLD_MODE;
+extern BOLD_MODE bold_mode;
+typedef enum {UND_LINE, UND_FONT} UND_MODE;
+extern UND_MODE und_mode;
 
 extern bool disable_bidi;
 extern bool support_wsl;
@@ -36,7 +46,12 @@ extern void win_init_fonts(int size);
 extern void win_adapt_term_size(bool sync_size_with_font, bool scale_font_with_size);
 
 extern void win_open_config(void);
+extern void * load_library_func(string lib, string func);
+extern void update_available_version(bool ok);
 extern void set_dpi_auto_scaling(bool on);
+extern void win_update_transparency(bool opaque);
+extern void win_prefix_title(const wstring);
+extern void win_unprefix_title(const wstring);
 
 extern void win_show_tip(int x, int y, int cols, int rows);
 extern void win_destroy_tip(void);

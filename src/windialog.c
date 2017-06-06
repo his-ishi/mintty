@@ -22,6 +22,9 @@ extern void setup_config_box(controlbox *);
 #include <signal.h>
 #endif
 
+#include <sys/cygwin.h>  // cygwin_internal
+#include <sys/stat.h>  // chmod
+
 
 /*
  * windlg.c - Dialogs, including the configuration dialog.
@@ -165,6 +168,9 @@ determine_geometry(HWND wnd)
   normr.right = 100;
   normr.bottom = 100;
   MapDialogRect(config_wnd, &normr);
+#ifdef debug_geometry
+  printf("dialog %ldx%ld scale %ldx%ld\n", r.right - r.left, r.bottom - r.top, normr.right, normr.bottom);
+#endif
 
   dialog_height = 100 * (r.bottom - r.top) / normr.bottom;
 }
@@ -201,13 +207,173 @@ debug(char *tag)
 
   debugtag = tag;
 
-  if (debugopt && *debugopt)
+  if (debugopt && strchr(debugopt, 'o'))
     printf("%s\n", tag);
 }
 
 #else
 # define debug(tag)	
 #endif
+
+
+#define dont_debug_version_check 1
+
+static char * version_available = 0;
+static bool version_retrieving = false;
+
+static void
+display_update(char * new)
+{
+  if (!config_wnd)
+    return;
+
+  //__ Options: dialog title
+  char * opt = _("Options");
+  //__ Options: dialog title: "mintty <release> available (for download)"
+  char * avl = _("available");
+  char * pat = "%s            ▶ %s %s %s ◀";
+  int len = strlen(opt) + strlen(APPNAME) + strlen(new) + strlen(avl) + strlen(pat) - 7;
+  char * msg = newn(char, len);
+  sprintf(msg, pat, opt, APPNAME, new, avl);
+#ifdef debug_version_check
+  printf("new version <%s> -> '%s'\n", new, msg);
+#endif
+  wchar * wmsg = cs__utftowcs(msg);
+  free(msg);
+  SendMessageW(config_wnd, WM_SETTEXT, 0, (LPARAM)wmsg);
+  free(wmsg);
+}
+
+static char * vfn = "/tmp/.mintty-version";
+
+void
+update_available_version(bool ok)
+{
+  version_retrieving = false;
+  if (!ok)
+    return;
+
+  char vers[99];
+  char * new = 0;
+  FILE * vfd = fopen(vfn, "r");
+  if (vfd) {
+    if (fgets(vers, sizeof vers, vfd)) {
+      vers[strcspn(vers, "\n")] = 0;
+      new = vers;
+#ifdef debug_version_check
+      printf("update_available_version read <%s>\n", vers);
+#endif
+    }
+    fclose(vfd);
+  }
+#if defined(debug_version_check) && debug_version_check > 1
+  new = "9.9.9";  // test value
+#endif
+#ifdef debug_version_check
+  printf("update_available_version: <%s>\n", new);
+#endif
+
+  /* V av new
+     x  0  x    =
+     x  0  y  ! =
+     x  x  x
+     x  x  y  ! =
+     x  y  y  %
+     x  y  z  ! =
+  */
+  if (new && strcmp(new, VERSION))
+    display_update(new);
+  if (new && (!version_available || strcmp(new, version_available))) {
+    if (version_available)
+      free(version_available);
+    version_available = strdup(new);
+  }
+#ifdef debug_version_check
+  printf("update_available_version -> available <%s>\n", version_available);
+#endif
+}
+
+char * mtv = "https://raw.githubusercontent.com/mintty/mintty/master/VERSION";
+
+static void
+deliver_available_version()
+{
+  if (version_retrieving || !cfg.check_version_update)
+    return;
+
+  static time_t version_retrieved = 0;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  if (version_retrieved && ts.tv_sec - version_retrieved < cfg.check_version_update)
+    return;
+  version_retrieved = ts.tv_sec;
+
+  version_retrieving = true;
+
+  if (fork())
+    return;  // do nothing in parent (or on failure)
+  //setsid();  // failed attempt to avoid busy hourglass
+  // proceed asynchronously, in child process
+
+  // determine available version
+  char * wfn = path_posix_to_win_a(vfn);
+  bool ok = true;
+#ifdef debug_version_check
+  printf("deliver_available_version downloading to <%s>...\n", wfn);
+#endif
+#ifdef use_powershell
+#warning on Windows 7, this hangs the mintty parent process!!!
+  char * cmdpat = "powershell.exe -command '(new-object System.Net.WebClient).DownloadFile(\"%s\", \"%s\")'";
+  char * cmd = newn(char, strlen(cmdpat) + strlen(mtv) + strlen(wfn) - 3);
+  sprintf(cmd, cmdpat, mtv, wfn);
+  system(cmd);
+  free(cmd);
+#else
+  HRESULT (WINAPI * pURLDownloadToFile)(void *, LPCSTR, LPCSTR, DWORD, void *) = 0;
+  pURLDownloadToFile = load_library_func("urlmon.dll", "URLDownloadToFileA");
+  if (pURLDownloadToFile) {
+#ifdef __CYGWIN__
+    /* Need to sync the Windows environment */
+    cygwin_internal(CW_SYNC_WINENV);
+#endif
+    if (S_OK != pURLDownloadToFile(NULL, mtv, wfn, 0, NULL))
+      ok = false;
+    chmod(vfn, 0666);
+  }
+  else
+    ok = false;
+#endif
+  free(wfn);
+
+  // notify terminal window to display the new available version
+  SendMessageA(wnd, WM_APP, ok, 0);  // -> parent -> update_available_version
+#ifdef debug_version_check
+  printf("deliver_available_version notified %d\n", ok);
+#endif
+  exit(0);
+}
+
+
+/*
+   adapted from messageboxmanager.zip
+   @ https://www.codeproject.com/articles/18399/localizing-system-messagebox
+ */
+static HHOOK windows_hook = 0;
+static bool hooked_window_activated = false;
+
+static void
+hook_windows(HOOKPROC hookproc)
+{
+  windows_hook = SetWindowsHookExW(WH_CBT, hookproc, 0, GetCurrentThreadId());
+}
+
+static void
+unhook_windows()
+{
+  UnhookWindowsHookEx(windows_hook);
+  hooked_window_activated = false;
+}
+
 
 #define dont_debug_messages
 
@@ -446,6 +612,57 @@ config_dialog_proc(HWND wnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 HWND config_wnd;
 
+static LRESULT CALLBACK
+scale_options(int nCode, WPARAM wParam, LPARAM lParam)
+{
+  (void)wParam;
+
+#define dont_debug_scale_options
+
+#ifdef debug_scale_options
+  char * hcbt[] = {
+    "HCBT_MOVESIZE",
+    "HCBT_MINMAX",
+    "HCBT_QS",
+    "HCBT_CREATEWND",
+    "HCBT_DESTROYWND",
+    "HCBT_ACTIVATE",
+    "HCBT_CLICKSKIPPED",
+    "HCBT_KEYSKIPPED",
+    "HCBT_SYSCOMMAND",
+    "HCBT_SETFOCUS",
+  };
+  char * sCode = "?";
+  if (nCode >= 0 && nCode < (int)lengthof(hcbt))
+    sCode = hcbt[nCode];
+  printf("hook %d %s", nCode, sCode);
+  if (nCode == HCBT_CREATEWND) {
+    CREATESTRUCTW * cs = ((CBT_CREATEWNDW *)lParam)->lpcs;
+    printf(" x %3d y %3d w %3d h %3d (%08X %07X) <%ls>\n", cs->x, cs->y, cs->cx, cs->cy, (uint)cs->style, (uint)cs->dwExStyle, cs->lpszName);
+  }
+  else if (nCode == HCBT_ACTIVATE) {
+    bool from_mouse = ((CBTACTIVATESTRUCT *)lParam)->fMouse;
+    printf(" mou %d\n", from_mouse);
+  }
+  else
+    printf("\n");
+#endif
+
+  if (nCode == HCBT_CREATEWND) {
+    // dialog item geometry calculations and adjustments
+    CREATESTRUCTW * cs = ((CBT_CREATEWNDW *)lParam)->lpcs;
+    if (!(cs->style & WS_CHILD)) {
+      //__ Options: dialog width scale factor (80...200)
+      int scale_options_width = atoi(_("100"));
+      if (scale_options_width >= 80 && scale_options_width <= 200)
+        cs->cx = cs->cx * scale_options_width / 100;
+    }
+  }
+
+  //return CallNextHookEx(0, nCode, wParam, lParam);
+  return 0;  // 0: let default dialog box procedure process the message
+}
+
 void
 win_open_config(void)
 {
@@ -476,8 +693,10 @@ win_open_config(void)
     initialised = true;
   }
 
+  hook_windows(scale_options);
   config_wnd = CreateDialog(inst, MAKEINTRESOURCE(IDD_MAINBOX),
                             wnd, config_dialog_proc);
+  unhook_windows();
   // At this point, we could actually calculate the size of the 
   // dialog box used for the Options menu; however, the resulting 
   // value(s) (here DIALOG_HEIGHT) is already needed before this point, 
@@ -488,32 +707,15 @@ win_open_config(void)
   // Set title of Options dialog explicitly to facilitate I18N
   //__ Options: dialog title
   SendMessageW(config_wnd, WM_SETTEXT, 0, (LPARAM)_W("Options"));
+  if (version_available && strcmp(VERSION, version_available))
+    display_update(version_available);
+  deliver_available_version();
 
   ShowWindow(config_wnd, SW_SHOW);
 
   set_dpi_auto_scaling(false);
 }
 
-
-/*
-   adapted from messageboxmanager.zip
-   @ https://www.codeproject.com/articles/18399/localizing-system-messagebox
- */
-static HHOOK windows_hook = 0;
-static bool hooked_window_activated = false;
-
-static void
-hook_windows(HOOKPROC hookproc)
-{
-  windows_hook = SetWindowsHookExW(WH_CBT, hookproc, 0, GetCurrentThreadId());
-}
-
-static void
-unhook_windows()
-{
-  UnhookWindowsHookEx(windows_hook);
-  hooked_window_activated = false;
-}
 
 static wstring oklabel = null;
 static int oktype = MB_OK;
@@ -576,9 +778,9 @@ set_labels(int nCode, WPARAM wParam, LPARAM lParam)
     hooked_window_activated = true;
   }
 
-  return CallNextHookEx(0, nCode, wParam, lParam);
+  //return CallNextHookEx(0, nCode, wParam, lParam);
+  return 0;  // 0: let default dialog box procedure process the message
 }
-
 
 int
 message_box(HWND parwnd, char * text, char * caption, int type, wstring ok)
@@ -622,6 +824,15 @@ message_box_w(HWND parwnd, wchar * wtext, wchar * wcaption, int type, wstring ok
   return ret;
 }
 
+#ifdef about_version_check
+static void CALLBACK
+hhook(LPHELPINFO lpHelpInfo)
+{
+  // test
+  SetWindowTextW(lpHelpInfo->hItemHandle, W("mintty %s available"));
+}
+#endif
+
 void
 win_show_about(void)
 {
@@ -649,7 +860,12 @@ win_show_about(void)
     .hwndOwner = config_wnd,
     .hInstance = inst,
     .lpszCaption = W(APPNAME),
+#ifdef about_version_check
+    .dwStyle = MB_USERICON | MB_OK | MB_HELP,
+    .lpfnMsgBoxCallback = hhook,
+#else
     .dwStyle = MB_USERICON | MB_OK,
+#endif
     .lpszIcon = MAKEINTRESOURCEW(IDI_MAINICON),
     .lpszText = wmsg
   });

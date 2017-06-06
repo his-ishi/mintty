@@ -87,10 +87,14 @@ ifeq ($(shell VER=`$(CC) -dumpversion`; expr $${VER%.*} '>=' 4.5), 1)
 endif
 
 scriptlib=-lusp10
+#downldlib=-lurlmon
+#downldlib="${SYSTEMROOT}/System32/urlmon.dll"
+downldlib=
+extralibs=$(scriptlib) $(downldlib)
 LDFLAGS := -L$(shell $(CC) -print-file-name=w32api) -static-libgcc
-LDLIBS := -mwindows $(scriptlib) -lcomctl32 -limm32 -lwinmm -lwinspool -lole32 -luuid
+LDLIBS := -mwindows $(extralibs) -lcomctl32 -limm32 -lwinmm -lwinspool -lole32 -luuid
 #override LDFLAGS += -L$(shell $(CC) -print-file-name=w32api) -static-libgcc
-#override LDLIBS += -mwindows $(scriptlib) -lcomctl32 -limm32 -lwinmm -lwinspool -lole32 -luuid
+#override LDLIBS += -mwindows $(extralibs) -lcomctl32 -limm32 -lwinmm -lwinspool -lole32 -luuid
 
 ifdef DEBUG
   CFLAGS += -g
@@ -255,12 +259,14 @@ checkresource:
 	rm -f .osdef .osmin
 
 # check whether sources are free of remaining debugging code
+SRCDEBUG:= -e "^(f*printf|\#define debug)" # \# make-escape to #
+SRCDEBUG+= -e "^(if|do|for|while) *[({]"
+SRCDEBUG+= -e "\((false|0) *&"
+SRCDEBUG+= -e "\((true|1) *\|"
+SRCDEBUG+= -e "& 0($|[^bx])"
+SRCDEBUG+= -e "^///"
 checksrc:
-	if egrep -a -e "^(f*printf|#define debug)" *.[hc]; then false; fi
-	if egrep -e "^(if|do|for|while) *[({]" *.c; then false; fi
-	if egrep -e "\((false|0) *&" *.c; then false; fi
-	if egrep -e "\((true|1) *\|" *.c; then false; fi
-	if egrep -e "& 0($|[^bx])" *.c; then false; fi
+	if egrep -a $(SRCDEBUG) *.[hc]; then false; fi
 
 #############################################################################
 # development and debug targets

@@ -170,12 +170,17 @@ static void
 write_backspace(void)
 {
   term_cursor *curs = &term.curs;
-  if (curs->x == 0 && (curs->y == 0 || !curs->autowrap))
+  int term_top = curs->origin ? term.marg_top : 0;
+  if (curs->x == 0 && (curs->y == term_top || !curs->autowrap
+                       || (!cfg.old_wrapmodes && !curs->rev_wrap)))
    /* do nothing */ ;
-  else if (curs->x == 0 && curs->y > 0)
+  else if (curs->x == 0 && curs->y > term_top)
     curs->x = term.cols - 1, curs->y--;
-  else if (curs->wrapnext)
+  else if (curs->wrapnext) {
     curs->wrapnext = false;
+    if (!curs->rev_wrap && !cfg.old_wrapmodes)
+      curs->x--;
+  }
   else
     curs->x--;
 }
@@ -244,6 +249,7 @@ write_char(wchar c, int width)
 
   term_cursor *curs = &term.curs;
   termline *line = term.lines[curs->y];
+
   void put_char(wchar c)
   {
     clear_cc(line, curs->x);
@@ -261,8 +267,10 @@ write_char(wchar c, int width)
     curs->wrapnext = false;
     line = term.lines[curs->y];
   }
+
   if (term.insert && width > 0)
     insert_char(width);
+
   switch (width) {
     when 1:  // Normal character.
       term_check_boundary(curs->x, curs->y);
@@ -334,10 +342,12 @@ write_char(wchar c, int width)
     otherwise:  // Anything else. Probably shouldn't get here.
       return;
   }
+
   curs->x++;
   if (curs->x == term.cols) {
     curs->x--;
-    curs->wrapnext = true;
+    if (curs->autowrap || cfg.old_wrapmodes)
+      curs->wrapnext = true;
   }
 }
 
@@ -611,6 +621,10 @@ set_modes(bool state)
           term.curs.origin = state;
         when 7:  /* DECAWM: auto wrap */
           term.curs.autowrap = state;
+          term.curs.wrapnext = false;
+        when 45:  /* xterm: reverse (auto) wraparound */
+          term.curs.rev_wrap = state;
+          term.curs.wrapnext = false;
         when 8:  /* DECARM: auto key repeat */
           // ignore
         when 9:  /* X10_MOUSE */
@@ -676,11 +690,16 @@ set_modes(bool state)
         /* Mintty private modes */
         when 7700:       /* CJK ambigous width reporting */
           term.report_ambig_width = state;
+        when 7711:       /* Scroll marker in current line */
+          if (state)
+            term.lines[term.curs.y]->attr |= LATTR_MARKED;
+          else
+            term.lines[term.curs.y]->attr |= LATTR_UNMARKED;
         when 7727:       /* Application escape key mode */
           term.app_escape_key = state;
         when 7728:       /* Escape sends FS (instead of ESC) */
           term.escape_sends_fs = state;
-        when 7730:
+        when 7730:       /* Sixel scrolling end position */
           /* on: sixel scrolling moves cursor to beginning of the line
              off(default): sixel scrolling moves cursor to left of graphics */
           term.sixel_scrolls_left = state;
@@ -698,12 +717,11 @@ set_modes(bool state)
           term.wheel_reporting = state;
         when 7787:       /* 'W': Application mousewheel mode */
           term.app_wheel = state;
-        when 8452:
+        when 8452:       /* Sixel scrolling end position right */
           /* on: sixel scrolling leaves cursor to right of graphic
              off(default): position after sixel depends on sixel_scrolls_left */
           term.sixel_scrolls_right = state;
-        /* Application control key modes */
-        when 77000 ... 77031: {
+        when 77000 ... 77031: { /* Application control key modes */
           int ctrl = arg - 77000;
           term.app_control = (term.app_control & ~(1 << ctrl)) | (state << ctrl);
         }
@@ -1339,6 +1357,9 @@ do_cmd(void)
     when 10:  do_colour_osc(false, FG_COLOUR_I, false);
     when 11:  do_colour_osc(false, BG_COLOUR_I, false);
     when 12:  do_colour_osc(false, CURSOR_COLOUR_I, false);
+    when 110: do_colour_osc(false, FG_COLOUR_I, true);
+    when 111: do_colour_osc(false, BG_COLOUR_I, true);
+    when 112: do_colour_osc(false, CURSOR_COLOUR_I, true);
     when 7:  // Set working directory (from Mac Terminal) for Alt+F2
       // extract dirname from file://host/path scheme
       if (!strncmp(s, "file:", 5))
@@ -1402,7 +1423,7 @@ do_cmd(void)
       *s = 0;
       child_printf("\e]7771;!%s\e\\", term.cmd_buf);
     }
-    when 77119: {
+    when 77119: {  // Indic and Extra characters wide handling
       int what = atoi(s);
       term.wide_indic = false;
       term.wide_extra = false;
@@ -1639,11 +1660,12 @@ term_write(const char *buf, uint len)
         }
         else if (c >= '0' && c <= '9') {
           uint i = term.csi_argc - 1;
-          if (i < lengthof(term.csi_argv))
+          if (i < lengthof(term.csi_argv)) {
             term.csi_argv[i] = 10 * term.csi_argv[i] + c - '0';
             if ((int)term.csi_argv[i] < 0)
               term.csi_argv[i] = INT_MAX;  // capture overflow
             term.csi_argv_defined[i] = 1;
+          }
         }
         else if (c < 0x40)
           term.esc_mod = term.esc_mod ? 0xFF : c;
@@ -1680,10 +1702,13 @@ term_write(const char *buf, uint len)
               term.cmd_num = -99;  // prevent wrong valid param
           when ';':
             term.state = CMD_STRING;
-          when '\a' or '\n' or '\r':
+          when '\a':
+            do_cmd();
             term.state = NORMAL;
           when '\e':
-            term.state = ESCAPE;
+            term.state = CMD_ESCAPE;
+          when '\n' or '\r':
+            term.state = NORMAL;
           otherwise:
             term.state = IGNORE_STRING;
         }

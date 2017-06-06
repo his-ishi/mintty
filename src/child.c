@@ -1,5 +1,5 @@
 // child.c (part of mintty)
-// Copyright 2008-11 Andy Koppe
+// Copyright 2008-11 Andy Koppe, 2015-2017 Thomas Wolff
 // Licensed under the terms of the GNU General Public License v3 or later.
 
 #include "child.h"
@@ -7,7 +7,7 @@
 #include "term.h"
 #include "charset.h"
 
-#include "win.h"  /* win_prefix_title */
+#include "winpriv.h"  /* win_prefix_title */
 
 #include <pwd.h>
 #include <fcntl.h>
@@ -39,7 +39,10 @@ string child_dir = null;
 
 static pid_t pid;
 static bool killed;
-static int pty_fd = -1, log_fd = -1, win_fd;
+static int win_fd;
+static int pty_fd = -1;
+static int log_fd = -1;
+bool logging = false;
 
 #if CYGWIN_VERSION_API_MINOR >= 66
 #include <langinfo.h>
@@ -94,6 +97,99 @@ sigexit(int sig)
   signal(sig, SIG_DFL);
   report_pos();
   kill(getpid(), sig);
+}
+
+static void
+open_logfile(bool toggling)
+{
+  // Open log file if any
+  if (*cfg.log) {
+    // use cygwin conversion function to escape unencoded characters 
+    // and thus avoid the locale trick (2.2.3)
+
+    if (0 == wcscmp(cfg.log, W("-"))) {
+      log_fd = fileno(stdout);
+      logging = true;
+    }
+    else {
+      char * log = path_win_w_to_posix(cfg.log);
+#ifdef debug_logfilename
+      printf("<%ls> -> <%s>\n", cfg.log, log);
+#endif
+      char * format = strchr(log, '%');
+      if (format && * ++ format == 'd' && !strchr(format, '%')) {
+        char * logf = newn(char, strlen(log) + 20);
+        sprintf(logf, log, getpid());
+        free(log);
+        log = logf;
+      }
+      else if (format) {
+        struct timeval now;
+        gettimeofday(& now, 0);
+        char * logf = newn(char, MAX_PATH + 1);
+        strftime(logf, MAX_PATH, log, localtime (& now.tv_sec));
+        free(log);
+        log = logf;
+      }
+
+      log_fd = open(log, O_WRONLY | O_CREAT | O_EXCL, 0600);
+      if (log_fd < 0) {
+        // report message and filename:
+        wchar * wpath = path_posix_to_win_w(log);
+        char * upath = cs__wcstoutf(wpath);
+#ifdef debug_logfilename
+        printf(" -> <%ls> -> <%s>\n", wpath, upath);
+#endif
+        char * msg = _("Error: Could not open log file");
+        if (toggling) {
+          char * err = strerror(errno);
+          char * errmsg = newn(char, strlen(msg) + strlen(err) + strlen(upath) + 4);
+          sprintf(errmsg, "%s: %s\n%s", msg, err, upath);
+          win_show_warning(errmsg);
+          free(errmsg);
+        }
+        else {
+          childerror(msg, false, errno, 0);
+          childerror(upath, false, 0, 0);
+        }
+        free(upath);
+        free(wpath);
+      }
+      else
+        logging = true;
+
+      free(log);
+    }
+  }
+}
+
+void
+toggle_logging()
+{
+  if (logging)
+    logging = false;
+  else if (log_fd >= 0)
+    logging = true;
+  else
+    open_logfile(true);
+}
+
+void
+child_update_charset(void)
+{
+#ifdef IUTF8
+  if (pty_fd >= 0) {
+    // Terminal line settings
+    struct termios attr;
+    tcgetattr(pty_fd, &attr);
+    bool utf8 = strcmp(nl_langinfo(CODESET), "UTF-8") == 0;
+    if (utf8)
+      attr.c_iflag |= IUTF8;
+    else
+      attr.c_iflag &= ~IUTF8;
+    tcsetattr(pty_fd, TCSANOW, &attr);
+  }
+#endif
 }
 
 void
@@ -179,6 +275,13 @@ child_create(char *argv[], struct winsize *winp)
     tcgetattr(0, &attr);
     attr.c_cc[VERASE] = cfg.backspace_sends_bs ? CTRL('H') : CDEL;
     attr.c_iflag |= IXANY | IMAXBEL;
+#ifdef IUTF8
+    bool utf8 = strcmp(nl_langinfo(CODESET), "UTF-8") == 0;
+    if (utf8)
+      attr.c_iflag |= IUTF8;
+    else
+      attr.c_iflag &= ~IUTF8;
+#endif
     attr.c_lflag |= ECHOE | ECHOK | ECHOCTL | ECHOKE;
     tcsetattr(0, TCSANOW, &attr);
 
@@ -203,6 +306,8 @@ child_create(char *argv[], struct winsize *winp)
   }
   else { // Parent process.
     fcntl(pty_fd, F_SETFL, O_NONBLOCK);
+
+    //child_update_charset();  // could do it here or as above
 
     if (cfg.create_utmp) {
       char *dev = ptsname(pty_fd);
@@ -232,50 +337,9 @@ child_create(char *argv[], struct winsize *winp)
 
   win_fd = open("/dev/windows", O_RDONLY);
 
-  // Open log file if any
-  if (*cfg.log) {
-    // use cygwin conversion function to escape unencoded characters 
-    // and thus avoid the locale trick (2.2.3)
-
-    if (!wcscmp(cfg.log, W("-")))
-      log_fd = fileno(stdout);
-    else {
-      char * log = path_win_w_to_posix(cfg.log);
-#ifdef debug_logfilename
-      printf("<%ls> -> <%s>\n", cfg.log, log);
-#endif
-      char * format = strchr(log, '%');
-      if (format && * ++ format == 'd' && !strchr(format, '%')) {
-        char * logf = newn(char, strlen(log) + 20);
-        sprintf(logf, log, getpid());
-        free(log);
-        log = logf;
-      }
-      else if (format) {
-        struct timeval now;
-        gettimeofday(& now, 0);
-        char * logf = newn(char, MAX_PATH + 1);
-        strftime(logf, MAX_PATH, log, localtime (& now.tv_sec));
-        free(log);
-        log = logf;
-      }
-
-      log_fd = open(log, O_WRONLY | O_CREAT | O_EXCL, 0600);
-      if (log_fd < 0) {
-        // report message and filename:
-        childerror(_("Error: Could not open log file"), false, errno, 0);
-        wchar * wp = path_posix_to_win_w(log);
-        char * up = cs__wcstoutf(wp);
-#ifdef debug_logfilename
-        printf(" -> <%ls> -> <%s>\n", wp, up);
-#endif
-        childerror(up, false, 0, 0);
-        free(up);
-        free(wp);
-      }
-
-      free(log);
-    }
+  if (cfg.logging) {
+    // option Logging=yes => initially open log file if configured
+    open_logfile(false);
   }
 }
 
@@ -381,7 +445,7 @@ child_proc(void)
 #endif
         if (len > 0) {
           term_write(buf, len);
-          if (log_fd >= 0)
+          if (log_fd >= 0 && logging)
             write(log_fd, buf, len);
         }
         else {
@@ -489,6 +553,90 @@ child_resize(struct winsize *winp)
     ioctl(pty_fd, TIOCSWINSZ, winp);
 }
 
+static int
+foreground_pid()
+{
+  return (pty_fd >= 0) ? tcgetpgrp(pty_fd) : 0;
+}
+
+static char *
+foreground_cwd()
+{
+  int fg_pid = foreground_pid();
+  if (fg_pid > 0) {
+    char proc_cwd[32];
+    sprintf(proc_cwd, "/proc/%u/cwd", fg_pid);
+    return realpath(proc_cwd, 0);
+  }
+  return 0;
+}
+
+char *
+foreground_prog()
+{
+  int fg_pid = foreground_pid();
+  if (fg_pid > 0) {
+    char exename[32];
+    sprintf(exename, "/proc/%u/exename", fg_pid);
+    FILE * enf = fopen(exename, "r");
+    if (enf) {
+      char exepath[MAX_PATH + 1];
+      fgets(exepath, sizeof exepath, enf);
+      fclose(enf);
+      // get basename of program path
+      char * exebase = strrchr(exepath, '/');
+      if (exebase)
+        exebase++;
+      else
+        exebase = exepath;
+      return strdup(exebase);
+    }
+  }
+  return 0;
+}
+
+void
+user_command(int n)
+{
+  if (*cfg.user_commands) {
+    char * cmds = cs__wcstombs(cfg.user_commands);
+    char * cmdp = cmds;
+    char sepch = ';';
+    if ((uchar)*cmdp <= (uchar)' ')
+      sepch = *cmdp++;
+
+    char * progp;
+    while (n >= 0 && (progp = strchr(cmdp, ':'))) {
+      progp++;
+      char * sepp = strchr(progp, sepch);
+      if (sepp)
+        *sepp = '\0';
+
+      if (n == 0) {
+        char * fgp = foreground_prog();
+        if (fgp) {
+          setenv("MINTTY_PROG", fgp, true);
+          free(fgp);
+        }
+        char * fgd = foreground_cwd();
+        if (fgd) {
+          setenv("MINTTY_CWD", fgd, true);
+          free(fgd);
+        }
+        term_cmd(progp);
+        break;
+      }
+      n--;
+
+      if (sepp)
+        cmdp = sepp + 1;
+      else
+        break;
+    }
+    free(cmds);
+  }
+}
+
 wstring
 child_conv_path(wstring wpath)
 {
@@ -532,15 +680,10 @@ child_conv_path(wstring wpath)
     if (fg_pid <= 0)
       fg_pid = pid;
 
-    char *cwd = 0;
-    if (fg_pid > 0) {
-      char proc_cwd[32];
-      sprintf(proc_cwd, "/proc/%u/cwd", fg_pid);
-      cwd = realpath(proc_cwd, 0);
-    }
-
+    char *cwd = foreground_cwd();
     exp_path = asform("%s/%s", cwd ?: home, path);
-    free(cwd);
+    if (cwd)
+      free(cwd);
 #else
     // If we're lucky, the path is relative to the home directory.
     exp_path = asform("%s/%s", home, path);

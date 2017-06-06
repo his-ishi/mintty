@@ -634,6 +634,56 @@ paste_hdrop(HDROP drop)
     free(fn);
   }
   buf_pos--;  // Drop trailing space
+
+  if (*cfg.drop_commands) {
+    // try to determine foreground program
+    char * fg_prog = foreground_prog();
+    if (fg_prog) {
+      // match program base name
+      char * matchconf(char * conf, char * item, char sepch) {
+        if (*conf == sepch)
+          conf++;
+        char * m = strstr(conf, item);
+        if (m && (m == conf || *(m - 1) == sepch)) {
+          m += strlen(item);
+          if (*m == ':')
+            return m + 1;
+          else {
+            m = strchr(m, ':');
+            if (m)
+              return matchconf(m, item, sepch);
+            else
+              return null;
+          }
+        }
+        else
+          return null;
+      }
+
+      char * drops = cs__wcstombs(cfg.drop_commands);
+      char sepch = ';';
+      if (((uchar)*drops) < (uchar)' ')
+        sepch = *drops;
+      char * paste = matchconf(drops, fg_prog, sepch);
+      if (paste) {
+        char * sep = strchr(paste, sepch);
+        if (sep)
+          *sep = 0;
+        buf[buf_pos] = 0;
+        char * pastebuf = newn(char, strlen(paste) + strlen(buf) + 1);
+        sprintf(pastebuf, paste, buf);
+        child_send(pastebuf, strlen(pastebuf));
+        free(pastebuf);
+        free(drops);
+        free(fg_prog);
+        free(buf);
+        return;
+      }
+      free(drops);
+      free(fg_prog);
+    }
+  }
+
   if (term.bracketed_paste)
     child_write("\e[200~", 6);
   child_send(buf, buf_pos);

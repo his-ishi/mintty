@@ -106,6 +106,7 @@ typedef struct {
   // Terminal
   string term;
   wstring answerback;
+  bool old_wrapmodes;
   bool bell_sound;
   int bell_type;
   wstring bell_file;
@@ -124,6 +125,7 @@ typedef struct {
   wstring exit_title;
   wstring icon;
   wstring log;
+  bool logging;
   wstring title;
   bool create_utmp;
   char window;
@@ -134,9 +136,12 @@ typedef struct {
   wstring app_id;
   wstring app_name;
   wstring app_launch_cmd;
+  wstring drop_commands;
+  wstring user_commands;
   int col_spacing, row_spacing;
   int padding;
   bool handle_dpichanged;
+  int check_version_update;
   string word_chars;
   string word_chars_excl;
   colour ime_cursor_colour;

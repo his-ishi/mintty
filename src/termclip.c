@@ -37,9 +37,9 @@ clip_addchar(clip_workbuf * b, wchar chr, int attr)
 }
 
 static void
-get_selection(clip_workbuf *buf)
+get_selection(clip_workbuf *buf, pos start, pos end, bool rect)
 {
-  pos start = term.sel_start, end = term.sel_end;
+//  pos start = term.sel_start, end = term.sel_end; bool rect = term.sel_rect;
 
   int old_top_x;
   int attr;
@@ -87,10 +87,9 @@ get_selection(clip_workbuf *buf)
     * ... and then clip it to the terminal x coordinate if
     * we're doing rectangular selection. (In this case we
     * still did the above, so that copying e.g. the right-hand
-    * column from a table doesn't fill with spaces on the
-    * right.)
+    * column from a table doesn't fill with spaces on the right.)
     */
-    if (term.sel_rect) {
+    if (rect) {
       if (nlpos.x > end.x)
         nlpos.x = end.x;
       nl = (start.y < end.y);
@@ -134,7 +133,7 @@ get_selection(clip_workbuf *buf)
       clip_addchar(buf, '\n', 0);
     }
     start.y++;
-    start.x = term.sel_rect ? old_top_x : 0;
+    start.x = rect ? old_top_x : 0;
 
     release_line(line);
   }
@@ -148,7 +147,7 @@ term_copy(void)
     return;
 
   clip_workbuf buf;
-  get_selection(&buf);
+  get_selection(&buf, term.sel_start, term.sel_end, term.sel_rect);
 
  /* Finally, transfer all that to the clipboard. */
   win_copy(buf.textbuf, buf.attrbuf, buf.bufpos);
@@ -162,7 +161,7 @@ term_open(void)
   if (!term.selected)
     return;
   clip_workbuf buf;
-  get_selection(&buf);
+  get_selection(&buf, term.sel_start, term.sel_end, term.sel_rect);
   free(buf.attrbuf);
 
   // Don't bother opening if it's all whitespace.
@@ -230,3 +229,158 @@ term_select_all(void)
   if (cfg.copy_on_select)
     term_copy();
 }
+
+#define dont_debug_user_cmd_clip
+
+static wchar *
+term_get_text(bool all, bool screen, bool command)
+{
+  pos start;
+  pos end;
+  bool rect = false;
+
+  if (command) {
+    int sbtop = -sblines();
+    int y = term_last_nonempty_line();
+    bool skipprompt = true;  // skip upper lines of multi-line prompt
+
+    if (y < sbtop) {
+      y = sbtop;
+      end = (pos){y, 0};
+    }
+    else {
+      termline * line = fetch_line(y);
+      if (line->attr & LATTR_MARKED) {
+        if (y > sbtop) {
+          y--;
+          end = (pos){y, term.cols};
+          termline * line = fetch_line(y);
+          if (line->attr & LATTR_MARKED)
+            y++;
+        }
+        else {
+          end = (pos){y, 0};
+        }
+      }
+      else {
+        skipprompt = line->attr & LATTR_UNMARKED;
+        end = (pos){y, term.cols};
+      }
+
+      if (fetch_line(y)->attr & LATTR_UNMARKED)
+        end = (pos){y, 0};
+    }
+
+    int yok = y;
+    while (y-- > sbtop) {
+      termline * line = fetch_line(y);
+#ifdef debug_user_cmd_clip
+      printf("y %d skip %d marked %X\n", y, skipprompt, line->attr & (LATTR_UNMARKED | LATTR_MARKED));
+#endif
+      if (skipprompt && (line->attr & LATTR_UNMARKED))
+        end = (pos){y, 0};
+      else
+        skipprompt = false;
+      if (line->attr & LATTR_MARKED) {
+        break;
+      }
+      yok = y;
+    }
+    start = (pos){yok, 0};
+#ifdef debug_user_cmd_clip
+    printf("%d:%d...%d:%d\n", start.y, start.x, end.y, end.x);
+#endif
+  }
+  else if (screen) {
+    start = (pos){term.disptop, 0};
+    end = (pos){term_last_nonempty_line(), term.cols};
+  }
+  else if (all) {
+    start = (pos){-sblines(), 0};
+    end = (pos){term_last_nonempty_line(), term.cols};
+  }
+  else if (!term.selected) {
+    return wcsdup(W(""));
+  }
+  else {
+    start = term.sel_start;
+    end = term.sel_end;
+    rect = term.sel_rect;
+  }
+
+  clip_workbuf buf;
+  get_selection(&buf, start, end, rect);
+  wchar * tbuf = buf.textbuf;
+  free(buf.attrbuf);
+  return tbuf;
+}
+
+void
+term_cmd(char * cmdpat)
+{
+  // provide scrollback buffer
+  wchar * wsel = term_get_text(true, false, false);
+  char * sel = cs__wcstombs(wsel);
+  free(wsel);
+  setenv("MINTTY_BUFFER", sel, true);
+  free(sel);
+  // provide current selection
+  wsel = term_get_text(false, false, false);
+  sel = cs__wcstombs(wsel);
+  free(wsel);
+  setenv("MINTTY_SELECT", sel, true);
+  free(sel);
+  // provide current screen
+  wsel = term_get_text(false, true, false);
+  sel = cs__wcstombs(wsel);
+  free(wsel);
+  setenv("MINTTY_SCREEN", sel, true);
+  free(sel);
+  // provide last command output
+  wsel = term_get_text(false, false, true);
+  sel = cs__wcstombs(wsel);
+  free(wsel);
+  setenv("MINTTY_OUTPUT", sel, true);
+  free(sel);
+  // provide window title
+  char * ttl = win_get_title();
+  setenv("MINTTY_TITLE", ttl, true);
+  free(ttl);
+
+#ifdef use_placeholders
+  sel = 0;
+  if (strstr(cmdpat, "%s") || strstr(cmdpat, "%1$s")) {
+    wchar * wsel = term_get_text(false, false, false);
+    sel = cs__wcstombs(wsel);
+    free(wsel);
+  }
+
+  int len = strlen(cmdpat) + (sel ? strlen(sel) : 0) + 1;
+  char * cmd = newn(char, len);
+  sprintf(cmd, cmdpat, sel ?: "");
+  if (sel)
+    free(sel);
+#else
+  char * cmd = cmdpat;
+#endif
+
+  FILE * cmdf = popen(cmd, "r");
+  unsetenv("MINTTY_TITLE");
+  unsetenv("MINTTY_COMMAND");
+  unsetenv("MINTTY_SCREEN");
+  unsetenv("MINTTY_SELECTION");
+  unsetenv("MINTTY_CWD");
+  unsetenv("MINTTY_PROG");
+  if (cmdf) {
+    if (term.bracketed_paste)
+      child_write("\e[200~", 6);
+    char line[222];
+    while (fgets(line, sizeof line, cmdf)) {
+      child_send(line, strlen(line));
+    }
+    pclose(cmdf);
+    if (term.bracketed_paste)
+      child_write("\e[201~", 6);
+  }
+}
+

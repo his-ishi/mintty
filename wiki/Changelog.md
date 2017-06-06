@@ -1,3 +1,55 @@
+### 2.7.5 (11 Mar 2017) ###
+
+Font handling / Text rendering
+  * Changing default FontRender=uniscribe (#605, #573).
+  * Zoom box drawing and some other characters to complete cell size so they can connect to each other (#628).
+  * Restricted glyph width scaling to support overhanging wide icons (#638).
+  * Tweaked italic overhang clipping (#638).
+
+Terminal
+  * Fixed Backspace upper limit in Origin mode.
+  * Added switching feature for Reverse Wraparound mode.
+  * Reverse Wraparound is false by default (rather than fixed true before), to comply with xterm and terminfo.
+  * Tweaked Wraparound and Backspace behaviour to comply with xterm and pass vttest 1.
+  * Option OldWrapModes=true would restore previous wraparound behaviour.
+  * Supporting OSC sequences 110/111/112 to reset foreground/background/cursor colour.
+
+Search
+  * Enabled matching of non-BMP characters (#85).
+  * Case-insensitive matching (#636).
+
+Tty and character set
+  * Keeping termios flag IUTF8 in sync with locale/charset to support proper backspace behaviour of programs not using readline.
+
+Drag and drop
+  * Drag-and-drop pasting applies configurable pattern (#440).
+
+Menu and hotkey functions
+  * Scroll markers (#569), facilitating quick scroll to previous/next command prompt.
+  * Optional extended context menu (with Ctrl).
+  * Extended context menu functions Copy & Paste (#539), Clear Scrollback (#421).
+  * Logging can be toggled from extended context menu (#342, ~#546, ~#279).
+  * Character information mode, switchable from extended context menu.
+  * User-defined commands in extended context menu (#100, #475).
+  * Ctrl+Shift+T hotkey cycles transparency (#625).
+  * Ctrl+Shift+T+cursor-block hotkeys tune transparency (#625).
+  * Ctrl+Shift+P hotkey cycles cursor style.
+  * Ctrl+Shift+O hotkey toggles scrollbar.
+
+Configuration
+  * Option to specify logfile but disable initial logging (Logging=no).
+  * New drag-and-drop paste configuration DropCommands (#440).
+  * New user commands configuration UserCommands (#100, #475).
+  * New option OldWrapModes to restore previous wraparound behaviour.
+  * Checking availability of mintty version update in Options dialog; adjust or disable with option CheckVersionUpdate (mintty/wsltty#20).
+  * Options dialog can be scaled via special pseudo-localization text (#637).
+  * Fixed localization of command-line messages (#637).
+
+Options dialog
+  * Extending font sample area to both sides, allowing longer font samples.
+  * Fixed mangled position of colour chooser item (#626).
+  * Unsqueezing colour chooser dialog to make more space for localized labels (#614, #611).
+
 ### 2.7.4 (29 Jan 2017) ###
 
 Localization details:
@@ -17,9 +69,9 @@ Configuration and Terminal settings:
   * Tweaking Font chooser dialog to widen font sample area.
 
 Other:
-  * Extend WSL link conversion (for link-click and link pasting) to non-/mnt paths (~#164, mintty/wsltty#19).
+  * Extended WSL link conversion (for link-click and link pasting) to non-/mnt paths (~#164, mintty/wsltty#19).
   * Fixed window popup (on escape sequence CSI 5t).
-  * Allowed automatic font metrics adjustment to increase row padding.
+  * Allowed automatic font metrics adjustment to increase row spacing.
 
 ### 2.7.3 (23 Dec 2016) ###
 
