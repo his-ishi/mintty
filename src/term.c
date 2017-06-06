@@ -161,6 +161,7 @@ term_reset(void)
   term.show_scrollbar = true;
   term.wide_indic = false;
   term.wide_extra = false;
+  term.disable_bidi = false;
 
   term.virtuallines = 0;
   term.altvirtuallines = 0;
@@ -877,7 +878,7 @@ term_check_boundary(int x, int y)
 
   termline *line = term.lines[y];
   if (x == term.cols)
-    line->attr &= ~LATTR_WRAPPED2;
+    line->lattr &= ~LATTR_WRAPPED2;
   else if (line->chars[x].chr == UCSWIDE) {
     clear_cc(line, x - 1);
     clear_cc(line, x);
@@ -1030,9 +1031,9 @@ term_erase(bool selective, bool line_only, bool from_begin, bool to_end)
       int cols = min(line->cols, line->size);
       if (start.x == cols) {
         if (line_only)
-          line->attr &= ~(LATTR_WRAPPED | LATTR_WRAPPED2);
+          line->lattr &= ~(LATTR_WRAPPED | LATTR_WRAPPED2);
         else
-          line->attr = LATTR_NORM;
+          line->lattr = LATTR_NORM;
       }
       else if (!selective || !(line->chars[start.x].attr.attr & ATTR_PROTECTED))
         line->chars[start.x] = term.erase_char;
@@ -1103,7 +1104,7 @@ term_paint(void)
       } else {
         tattr.attr &= ~TATTR_RESULT;
       }
-      if (markpos_valid && (displine->attr & (LATTR_MARKED | LATTR_UNMARKED))) {
+      if (markpos_valid && (displine->lattr & (LATTR_MARKED | LATTR_UNMARKED))) {
         tattr.attr |= TATTR_MARKED;
         if (scrpos.y == markpos)
           tattr.attr |= TATTR_CURMARKED;
@@ -1214,28 +1215,54 @@ term_paint(void)
     * expectation that front ends clip all text runs to their
     * bounding rectangle, should solve any possible problems
     * with fonts that overflow their character cells.
+    *
+    * For the new italic overhang feature, this had to be extended 
+    * (firstitalicstart) as italic chunks are painted in reverse order.
+    * Also, to clear overhang artefacts after scrolling, a run to the 
+    * right of an italic run needs to be repainted (prevdirtyitalic).
+    * Also, after the loop, overhang into the right padding border 
+    * must be detected and propagated.
+    * And this in a way that does not cause continuous repainting 
+    * of further unchanged cells...
     */
     int laststart = 0;
+    int firstitalicstart = -1;
+    bool prevdirtyitalic = false;
     bool dirtyrect = false;
     for (int j = 0; j < term.cols; j++) {
       if (dispchars[j].attr.attr & DATTR_STARTRUN) {
         laststart = j;
         dirtyrect = false;
+        if (firstitalicstart < 0 && newchars[j].attr.attr & ATTR_ITALIC)
+          firstitalicstart = j;
       }
 
-      if (dispchars[j].chr != newchars[j].chr
-          || (dispchars[j].attr.truefg != newchars[j].attr.truefg)
-          || (dispchars[j].attr.truebg != newchars[j].attr.truebg)
-          || (dispchars[j].attr.attr & ~DATTR_STARTRUN) != newchars[j].attr.attr) {
-        if (!dirtyrect) {
-          for (int k = laststart; k < j; k++)
-            dispchars[k].attr.attr |= ATTR_INVALID;
-          dirtyrect = true;
-        }
+      if (!dirtyrect  // test this first for potential speed-up
+          && (dispchars[j].chr != newchars[j].chr
+              || (dispchars[j].attr.truefg != newchars[j].attr.truefg)
+              || (dispchars[j].attr.truebg != newchars[j].attr.truebg)
+              || (dispchars[j].attr.attr & ~DATTR_STARTRUN) != newchars[j].attr.attr
+              || (prevdirtyitalic && (dispchars[j].attr.attr & DATTR_STARTRUN))
+             ))
+      {
+        int start = firstitalicstart >= 0 ? firstitalicstart : laststart;
+        firstitalicstart = -1;
+        for (int k = start; k < j; k++)
+          dispchars[k].attr.attr |= ATTR_INVALID;
+        dirtyrect = true;
+        prevdirtyitalic = false;
       }
+      if (dirtyrect && dispchars[j].attr.attr & ATTR_ITALIC)
+        prevdirtyitalic = true;
+      else if (dispchars[j].attr.attr & DATTR_STARTRUN)
+        prevdirtyitalic = false;
 
       if (dirtyrect)
         dispchars[j].attr.attr |= ATTR_INVALID;
+    }
+    if (prevdirtyitalic) {
+      // clear italic overhang into right padding border
+      win_text(term.cols, i, W(" "), 1, CATTR_DEFAULT, (cattr*)&CATTR_DEFAULT, line->lattr | LATTR_CLEARPAD, false);
     }
 
    /*
@@ -1249,12 +1276,52 @@ term_paint(void)
     uchar bc = 0;
     bool combdouble_pending = false;
     bool was_combdouble_pending = false;
-    bool dirty_run = (line->attr != displine->attr);
+    bool dirty_run = (line->lattr != displine->lattr);
     bool dirty_line = dirty_run;
     cattr attr = CATTR_DEFAULT;
     int start = 0;
 
-    displine->attr = line->attr;
+    displine->lattr = line->lattr;
+
+    static struct italic_chunk {
+      int x;
+      wchar * text;
+      int len;
+      cattr attr;
+      cattr * textattr;
+      bool has_rtl;
+    } * italic_stack = 0;
+    static int italic_chunks = 0;
+    static int italic_chunkmax = 0;
+
+#define dont_debug_italic_chunks
+
+    void push_text(int x, wchar * text, int len, cattr attr, cattr * textattr, bool has_rtl)
+    {
+#ifdef debug_italic_chunks
+      printf("%2d:%d++ <", i, italic_chunks);
+      for (int k = 0; k < len; k++)
+        printf("%lc", text[k]);
+      printf(">\n");
+#endif
+      if (italic_chunks >= italic_chunkmax) {
+        italic_chunkmax += 5;
+        if (italic_stack)
+          italic_stack = renewn(italic_stack, italic_chunkmax);
+        else
+          italic_stack = newn(struct italic_chunk, italic_chunkmax);
+      }
+      struct italic_chunk * icp = &italic_stack[italic_chunks++];
+      icp->x = x;
+      icp->text = newn(wchar, len);
+      wcsncpy(icp->text, text, len);
+      icp->len = len;
+      icp->attr = attr;
+      icp->textattr = newn(cattr, len);
+      for (int k = 0; k < len; k++)
+        icp->textattr[k] = textattr[k];
+      icp->has_rtl = has_rtl;
+    }
 
     for (int j = 0; j < term.cols; j++) {
       termchar *d = chars + j;
@@ -1316,8 +1383,20 @@ term_paint(void)
       bc = tbc;
 
       if (break_run) {
-        if (dirty_run && textlen)
-          win_text(start, i, text, textlen, attr, textattr, line->attr, has_rtl);
+#ifdef debug_italic_chunks
+        if (*text > ' ' && textlen > 1) {
+          printf("%2d: ?? <", i);
+          for (int k = 0; k < textlen; k++)
+            printf("%lc", text[k]);
+          printf(">\n");
+        }
+#endif
+        if (dirty_run && textlen) {
+          if (attr.attr & ATTR_ITALIC)
+            push_text(start, text, textlen, attr, textattr, has_rtl);
+          else
+            win_text(start, i, text, textlen, attr, textattr, line->lattr, has_rtl);
+        }
         start = j;
         textlen = 0;
         has_rtl = false;
@@ -1382,7 +1461,12 @@ term_paint(void)
           }
           else {
             textattr[textlen] = dd->attr;
-            text[textlen++] = dd->chr;
+            // hide bidi isolate mark glyphs (if handled zero-width)
+            if (dd->chr >= 0x2066 && dd->chr <= 0x2069)
+              text[textlen++] = 0x200B;  // zero width space
+            else
+              text[textlen++] = dd->chr;
+            // mark combining unless pseudo-combining surrogates
             if ((dd->chr & 0xFC00) != 0xDC00)
               attr.attr |= TATTR_COMBINING;
 #ifdef debug_surrogates
@@ -1419,7 +1503,39 @@ term_paint(void)
       }
     }
     if (dirty_run && textlen)
-      win_text(start, i, text, textlen, attr, textattr, line->attr, has_rtl);
+      win_text(start, i, text, textlen, attr, textattr, line->lattr, has_rtl);
+
+    for (int j = italic_chunks - 1; j >= 0; j--) {
+      struct italic_chunk * icp = &italic_stack[j];
+#ifdef debug_italic_chunks
+      printf("%2d:%d-- <", i, j);
+      for (int k = 0; k < icp->len; k++)
+        printf("%lc", icp->text[k]);
+      printf(">\n");
+#endif
+      cattr attr = icp->attr;
+      attr.attr &= ~ATTR_ITALIC;
+      static wchar * bgspace = 0;
+      static int bgspaces = 0;
+      // provide a sufficient number of spaces for the background
+      if (icp->len > bgspaces) {
+        if (bgspace)
+          bgspace = renewn(bgspace, icp->len);
+        else
+          bgspace = newn(wchar, icp->len);
+        for (int k = bgspaces; k < icp->len; k++)
+          bgspace[k] = ' ';
+        bgspaces = icp->len;
+      }
+      // background: non-italic
+      win_text(icp->x, i, bgspace, icp->len, attr, icp->textattr, line->lattr, icp->has_rtl);
+      // foreground: transparent and with extended clipping box
+      win_text(icp->x, i, icp->text, icp->len, icp->attr, icp->textattr, line->lattr, icp->has_rtl);
+      free(icp->text);
+      free(icp->textattr);
+    }
+    italic_chunks = 0;
+
     release_line(line);
   }
 
@@ -1439,7 +1555,7 @@ term_invalidate(int left, int top, int right, int bottom)
     bottom = term.rows - 1;
 
   for (int i = top; i <= bottom && i < term.rows; i++) {
-    if ((term.displines[i]->attr & LATTR_MODE) == LATTR_NORM)
+    if ((term.displines[i]->lattr & LATTR_MODE) == LATTR_NORM)
       for (int j = left; j <= right && j < term.cols; j++)
         term.displines[i]->chars[j].attr.attr |= ATTR_INVALID;
     else
@@ -1472,7 +1588,7 @@ term_scroll(int rel, int where)
     int y = markpos;
     while ((rel == SB_PRIOR) ? y-- > sbtop : y++ < sbbot) {
       termline * line = fetch_line(y);
-      if (line->attr & LATTR_MARKED) {
+      if (line->lattr & LATTR_MARKED) {
         markpos = y;
         term.disptop = y;
         break;

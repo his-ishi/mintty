@@ -5,8 +5,10 @@
 
 #define dont_debuglog
 #ifdef debuglog
-  FILE * mtlog = 0;
+FILE * mtlog = 0;
 #endif
+
+char * mintty_debug;
 
 #define dont_debug_resize
 
@@ -79,7 +81,6 @@ static bool maxwidth = false;
 static bool maxheight = false;
 static bool store_taskbar_properties = false;
 static bool prevent_pinning = false;
-bool disable_bidi = false;
 bool support_wsl = false;
 
 
@@ -779,11 +780,14 @@ win_fix_position(void)
   MONITORINFO mi;
   get_my_monitor_info(&mi);
   RECT ar = mi.rcWork;
+  WINDOWINFO winfo;
+  winfo.cbSize = sizeof(WINDOWINFO);
+  GetWindowInfo(wnd, &winfo);
 
   // Correct edges. Top and left win if the window is too big.
   wr.left -= max(0, wr.right - ar.right);
   wr.top -= max(0, wr.bottom - ar.bottom);
-  wr.left = max(wr.left, ar.left);
+  wr.left = max(wr.left, (int)(ar.left - winfo.cxWindowBorders));
   wr.top = max(wr.top, ar.top);
 
   SetWindowPos(wnd, 0, wr.left, wr.top, 0, 0,
@@ -1407,7 +1411,12 @@ static struct {
         when IDM_SEARCH: win_open_search();
         when IDM_FLIPSCREEN: term_flip_screen();
         when IDM_OPTIONS: win_open_config();
-        when IDM_NEW: child_fork(main_argc, main_argv, 0);
+        when IDM_NEW: {
+          HMONITOR mon = MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST);
+          int x, y;
+          int moni = search_monitors(&x, &y, mon, true, 0);
+          child_fork(main_argc, main_argv, moni);
+        }
         when IDM_NEW_MONI: child_fork(main_argc, main_argv, (int)lp - ' ');
         when IDM_COPYTITLE: win_copy_title();
       }
@@ -2187,6 +2196,7 @@ main(int argc, char *argv[])
 {
   main_argv = argv;
   main_argc = argc;
+  mintty_debug = getenv("MINTTY_DEBUG") ?: "";
 #ifdef debuglog
   mtlog = fopen("/tmp/mtlog", "a");
   {
@@ -2315,10 +2325,13 @@ main(int argc, char *argv[])
         border_style = strdup(optarg);
       when 'R':
         switch (*optarg) {
-          when 'm':
-            report_moni = true;
           when 's' or 'o':
             report_geom = strdup(optarg);
+          when 'm':
+            report_moni = true;
+          when 'f':
+            list_fonts(true);
+            exit(0);
         }
       when 'u': cfg.create_utmp = true;
       when '':
@@ -2327,7 +2340,7 @@ main(int argc, char *argv[])
       when '': store_taskbar_properties = true;
       when 'w': set_arg_option("Window", optarg);
       when '': set_arg_option("Class", optarg);
-      when '': disable_bidi = true;
+      when '': cfg.bidi = 0;
       when '': support_wsl = true;
       when '':
         if (chdir(optarg) < 0) {

@@ -7,7 +7,6 @@
 #include "winsearch.h"
 #include "charset.h"  // wcscpy, combiningdouble
 
-#include "minibidi.h"
 #include "winimg.h"
 
 #include <winnls.h>
@@ -1138,8 +1137,9 @@ char1ulen(wchar * text)
  * We are allowed to fiddle with the contents of `text'.
  */
 void
-win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int lattr, bool has_rtl)
+win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, ushort lattr, bool has_rtl)
 {
+  bool clearpad = lattr & LATTR_CLEARPAD;
   trace_line("win_text:", text, len);
 
   lattr &= LATTR_MODE;
@@ -1385,6 +1385,12 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int la
     .top = y, .bottom = y + cell_height,
     .left = x, .right = min(x + width, cell_width * term.cols + PADDING)
   };
+  if (attr.attr & ATTR_ITALIC) {
+    box.right += cell_width;
+    //box.left -= cell_width;
+  }
+  if (clearpad)
+    box.right += PADDING;
   RECT box2 = box;
   if (combining_double) {
     box2.left -= char_width;
@@ -1454,6 +1460,10 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int la
  /* Finally, draw the text */
   SetBkMode(dc, OPAQUE);
   uint overwropt = ETO_OPAQUE;
+  if (attr.attr & ATTR_ITALIC) {
+    SetBkMode(dc, TRANSPARENT);
+    overwropt = 0;
+  }
   trace_line(" TextOut:", text, len);
   // The combining characters separate rendering trick *alone* 
   // makes some combining characters better (~#553, #295), 
@@ -1538,7 +1548,7 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, int la
   text_out_end();
 
   int line_width = (3
-                    + (attr.attr & ATTR_BOLD ? 2 : 0)
+                    + (attr.attr & ATTR_BOLD ? 1 : 0)
                     + (lattr >= LATTR_WIDE ? 2 : 0)
                     + (lattr >= LATTR_TOP ? 2 : 0)
                    ) * cell_height / 40;
