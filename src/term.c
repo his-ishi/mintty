@@ -39,6 +39,9 @@ vt220(string term)
  * Call when the terminal's blinking-text settings change, or when
  * a text blink has just occurred.
  */
+static void term_schedule_tblink(void);
+static void term_schedule_tblink2(void);
+
 static void
 tblink_cb(void)
 {
@@ -47,13 +50,30 @@ tblink_cb(void)
   win_update();
 }
 
-void
+static void
 term_schedule_tblink(void)
 {
   if (term.blink_is_real)
     win_set_timer(tblink_cb, 500);
   else
     term.tblinker = 1;  /* reset when not in use */
+}
+
+static void
+tblink2_cb(void)
+{
+  term.tblinker2 = !term.tblinker2;
+  term_schedule_tblink2();
+  win_update();
+}
+
+static void
+term_schedule_tblink2(void)
+{
+  if (term.blink_is_real)
+    win_set_timer(tblink2_cb, 300);
+  else
+    term.tblinker2 = 1;  /* reset when not in use */
 }
 
 /*
@@ -114,7 +134,13 @@ static void
 term_cursor_reset(term_cursor *curs)
 {
   curs->attr = CATTR_DEFAULT;
-  curs->csets[0] = curs->csets[1] = CSET_ASCII;
+  curs->g0123 = 0;
+  curs->oem_acs = 0;
+  curs->utf = false;
+  for (uint i = 0; i < lengthof(curs->csets); i++)
+    curs->csets[i] = CSET_ASCII;
+  curs->cset_single = CSET_ASCII;
+
   curs->autowrap = true;
   curs->rev_wrap = cfg.old_wrapmodes;
 }
@@ -132,6 +158,7 @@ term_reset(void)
   term_cursor_reset(&term.curs);
   term_cursor_reset(&term.saved_cursors[0]);
   term_cursor_reset(&term.saved_cursors[1]);
+  term_update_cs();
 
   term.backspace_sends_bs = cfg.backspace_sends_bs;
   term.delete_sends_del = cfg.delete_sends_del;
@@ -196,6 +223,7 @@ term_reset(void)
   }
   term.selected = false;
   term_schedule_tblink();
+  term_schedule_tblink2();
   term_schedule_cblink();
   term_clear_scrollback();
 
@@ -242,6 +270,7 @@ term_reconfig(void)
     term.blink_is_real = new_cfg.allow_blinking;
   cfg.cursor_blinks = new_cfg.cursor_blinks;
   term_schedule_tblink();
+  term_schedule_tblink2();
   term_schedule_cblink();
   if (new_cfg.backspace_sends_bs != cfg.backspace_sends_bs)
     term.backspace_sends_bs = new_cfg.backspace_sends_bs;
@@ -1120,6 +1149,11 @@ term_paint(void)
           tchar = ' ';
         tattr.attr &= ~ATTR_BLINK;
       }
+      if (term.blink_is_real && (tattr.attr & ATTR_BLINK2)) {
+        if (term.has_focus && term.tblinker2)
+          tchar = ' ';
+        tattr.attr &= ~ATTR_BLINK2;
+      }
 
      /* Mark box drawing, block and some other characters 
       * that should connect to their neighbour cells and thus 
@@ -1634,7 +1668,7 @@ term_update_cs(void)
   cs_set_mode(
     curs->oem_acs ? CSM_OEM :
     curs->utf ? CSM_UTF8 :
-    curs->csets[curs->g1] == CSET_OEM ? CSM_OEM : CSM_DEFAULT
+    curs->csets[curs->g0123] == CSET_OEM ? CSM_OEM : CSM_DEFAULT
   );
 }
 

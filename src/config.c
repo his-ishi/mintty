@@ -50,6 +50,15 @@ const config default_cfg = {
   .cursor_blinks = true,
   // Text
   .font = {.name = W("Lucida Console"), .size = 9, .weight = 400, .isbold = false},
+  .fontfams[1] = {.name = W(""), .weight = 400, .isbold = false},
+  .fontfams[2] = {.name = W(""), .weight = 400, .isbold = false},
+  .fontfams[3] = {.name = W(""), .weight = 400, .isbold = false},
+  .fontfams[4] = {.name = W(""), .weight = 400, .isbold = false},
+  .fontfams[5] = {.name = W(""), .weight = 400, .isbold = false},
+  .fontfams[6] = {.name = W(""), .weight = 400, .isbold = false},
+  .fontfams[7] = {.name = W(""), .weight = 400, .isbold = false},
+  .fontfams[8] = {.name = W(""), .weight = 400, .isbold = false},
+  .fontfams[9] = {.name = W(""), .weight = 400, .isbold = false},
   .font_sample = W(""),
   .show_hidden_fonts = false,
   .font_smoothing = FS_DEFAULT,
@@ -72,6 +81,7 @@ const config default_cfg = {
   .alt_fn_shortcuts = true,
   .ctrl_shift_shortcuts = false,
   .ctrl_exchange_shift = false,
+  .ctrl_controls = true,
   .compose_key = 0,
   .key_prtscreen = "",	// VK_SNAPSHOT
   .key_pause = "",	// VK_PAUSE
@@ -169,7 +179,9 @@ typedef enum {
   OPT_BOOL, OPT_MOD, OPT_TRANS, OPT_CURSOR, OPT_FONTSMOOTH, OPT_FONTRENDER,
   OPT_MIDDLECLICK, OPT_RIGHTCLICK, OPT_SCROLLBAR, OPT_WINDOW, OPT_HOLD,
   OPT_INT, OPT_COLOUR, OPT_STRING, OPT_WSTRING,
-  OPT_LEGACY = 16
+  OPT_TYPE_MASK = 0x1F,
+  OPT_LEGACY = 0x20,
+  OPT_KEEPCR = 0x40
 } opt_type;
 
 #define offcfg(option) offsetof(config, option)
@@ -221,6 +233,24 @@ options[] = {
   {"FontRender", OPT_FONTRENDER, offcfg(font_render)},
   {"FontMenu", OPT_INT, offcfg(fontmenu)},
   {"OldFontMenu", OPT_INT | OPT_LEGACY, offcfg(fontmenu)},
+  {"Font1", OPT_WSTRING, offcfg(fontfams[1].name)},
+  {"Font1Weight", OPT_INT, offcfg(fontfams[1].weight)},
+  {"Font2", OPT_WSTRING, offcfg(fontfams[2].name)},
+  {"Font2Weight", OPT_INT, offcfg(fontfams[2].weight)},
+  {"Font3", OPT_WSTRING, offcfg(fontfams[3].name)},
+  {"Font3Weight", OPT_INT, offcfg(fontfams[3].weight)},
+  {"Font4", OPT_WSTRING, offcfg(fontfams[4].name)},
+  {"Font4Weight", OPT_INT, offcfg(fontfams[4].weight)},
+  {"Font5", OPT_WSTRING, offcfg(fontfams[5].name)},
+  {"Font5Weight", OPT_INT, offcfg(fontfams[5].weight)},
+  {"Font6", OPT_WSTRING, offcfg(fontfams[6].name)},
+  {"Font6Weight", OPT_INT, offcfg(fontfams[6].weight)},
+  {"Font7", OPT_WSTRING, offcfg(fontfams[7].name)},
+  {"Font7Weight", OPT_INT, offcfg(fontfams[7].weight)},
+  {"Font8", OPT_WSTRING, offcfg(fontfams[8].name)},
+  {"Font8Weight", OPT_INT, offcfg(fontfams[8].weight)},
+  {"Font9", OPT_WSTRING, offcfg(fontfams[9].name)},
+  {"Font9Weight", OPT_INT, offcfg(fontfams[9].weight)},
 
   // Keys
   {"BackspaceSendsBS", OPT_BOOL, offcfg(backspace_sends_bs)},
@@ -234,6 +264,9 @@ options[] = {
   {"AltFnShortcuts", OPT_BOOL, offcfg(alt_fn_shortcuts)},
   {"CtrlShiftShortcuts", OPT_BOOL, offcfg(ctrl_shift_shortcuts)},
   {"CtrlExchangeShift", OPT_BOOL, offcfg(ctrl_exchange_shift)},
+#ifdef support_disable_ctrl_controls_663
+  {"CtrlControls", OPT_BOOL | OPT_LEGACY, offcfg(ctrl_controls)},
+#endif
   {"ComposeKey", OPT_MOD, offcfg(compose_key)},
   {"Key_PrintScreen", OPT_STRING, offcfg(key_prtscreen)},
   {"Key_Pause", OPT_STRING, offcfg(key_pause)},
@@ -303,8 +336,8 @@ options[] = {
   {"AppID", OPT_WSTRING, offcfg(app_id)},
   {"AppName", OPT_WSTRING, offcfg(app_name)},
   {"AppLaunchCmd", OPT_WSTRING, offcfg(app_launch_cmd)},
-  {"DropCommands", OPT_WSTRING, offcfg(drop_commands)},
-  {"UserCommands", OPT_WSTRING, offcfg(user_commands)},
+  {"DropCommands", OPT_WSTRING | OPT_KEEPCR, offcfg(drop_commands)},
+  {"UserCommands", OPT_WSTRING | OPT_KEEPCR, offcfg(user_commands)},
   {"ColSpacing", OPT_INT, offcfg(col_spacing)},
   {"RowSpacing", OPT_INT, offcfg(row_spacing)},
   {"Padding", OPT_INT, offcfg(padding)},
@@ -593,7 +626,9 @@ set_option(string name, string val_str, bool from_file)
     return i;
 
   void *val_p = (void *)&cfg + options[i].offset;
-  uint type = options[i].type & ~OPT_LEGACY;
+  if (!(options[i].type & OPT_KEEPCR))
+    ((char *)val_str)[strcspn(val_str, "\r")] = 0;
+  uint type = options[i].type & OPT_TYPE_MASK;
 
   switch (type) {
     when OPT_STRING:
@@ -1175,7 +1210,7 @@ copy_config(char * tag, config * dst_p, const config * src_p)
       uint offset = options[i].offset;
       void *dst_val_p = (void *)dst_p + offset;
       void *src_val_p = (void *)src_p + offset;
-      switch (type) {
+      switch (type & OPT_TYPE_MASK) {
         when OPT_STRING:
           strset(dst_val_p, *(string *)src_val_p);
         when OPT_WSTRING:
@@ -1266,7 +1301,7 @@ save_config(void)
         //?void *cfg_p = seen_arg_option(i) ? &file_cfg : &cfg;
         void *cfg_p = &file_cfg;
         void *val_p = cfg_p + options[i].offset;
-        switch (type) {
+        switch (type & OPT_TYPE_MASK) {
           when OPT_STRING:
             fprintf(file, "%s", *(string *)val_p);
           when OPT_WSTRING: {
@@ -1316,19 +1351,20 @@ apply_config(bool save)
     //void *val_p = (void *)&cfg + offset;
     void *val_p = (void *)&file_cfg + offset;
     void *new_val_p = (void *)&new_cfg + offset;
-    bool changed;
-    switch (type) {
-      when OPT_STRING:
-        changed = strcmp(*(string *)val_p, *(string *)new_val_p);
-      when OPT_WSTRING:
-        changed = wcscmp(*(wstring *)val_p, *(wstring *)new_val_p);
-      when OPT_INT or OPT_COLOUR:
-        changed = (*(int *)val_p != *(int *)new_val_p);
-      otherwise:
-        changed = (*(char *)val_p != *(char *)new_val_p);
-    }
-    if (changed) {
-      remember_file_option("apply", i);
+    if (!(type & OPT_LEGACY)) {
+      bool changed;
+      switch (type & OPT_TYPE_MASK) {
+        when OPT_STRING:
+          changed = strcmp(*(string *)val_p, *(string *)new_val_p);
+        when OPT_WSTRING:
+          changed = wcscmp(*(wstring *)val_p, *(wstring *)new_val_p);
+        when OPT_INT or OPT_COLOUR:
+          changed = (*(int *)val_p != *(int *)new_val_p);
+        otherwise:
+          changed = (*(char *)val_p != *(char *)new_val_p);
+      }
+      if (changed)
+        remember_file_option("apply", i);
     }
   }
 

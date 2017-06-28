@@ -1,3 +1,28 @@
+### 2.7.8 (25 June 2017) ###
+
+Font rendering
+  * Support for alternative fonts as selected via ECMA-48 SGR codes 11...19.
+  * Tweaked ambiguous width checking to not expand glyphs excessively (#615).
+
+Terminal features
+  * SGR 6 attribute "rapidly blinking" (ECMA-48).
+  * Fixed Cursor Position Report (CPR) in Origin Mode (DECOM) (vttest 6-3).
+  * DEC Technical character set support (approximating some segments).
+  * G2/G3 character set designations and GL mapping (vttest 3-10 GL cases).
+  * G2/G3 character set single shift selection (vttest 3-11).
+  * Resetting invoked character set to G0 on terminal reset.
+  * CHT (move right n tab positions) (vttest 11-5-4).
+  * Completed Status String (DECRQSS) with missing attributes.
+
+Window handling
+  * Suppressing Windows-caused side effects of "resizing" to current size (#629).
+  * Tweaked window-raising to top (previous #652) to not stick on top (mintty/wsltty#47, #667).
+  * Reverted capturing of Shift+Ctrl+0 (~#233) to enable language switching (#663).
+  * Capture key after leaving system menu with ESC; insert it and prevent beep.
+
+Configuration
+  * Reverted to stripping CR from most configuration strings (mintty/wsltty#46).
+
 ### 2.7.7 (20 May 2017) ###
 
 Font rendering and display handling

@@ -99,12 +99,16 @@ enum {
   ATTR_OVERL      = 0x10000000u,
   ATTR_PROTECTED  = 0x02000000u,
   ATTR_WIDE       = 0x04000000u,
+  ATTR_BLINK2     = 0x100000000000000,
 
   ATTR_NARROW     = 0x08000000u,
   ATTR_EXPAND     = 0x80000000u,
 
   GRAPH_MASK      = 0x00FF00000000u,
   ATTR_GRAPH_SHIFT = 32,
+
+  FONTFAM_MASK    = 0xF0000000000000u,
+  ATTR_FONTFAM_SHIFT = 52,
 
   TATTR_RIGHTCURS = 0x010000000000u, /* cursor-on-RHS */
   TATTR_PASCURS   = 0x020000000000u, /* passive cursor (box) */
@@ -119,7 +123,8 @@ enum {
   TATTR_CURMARKED = 0x02000000000000u, /* current scroll marker */
 
   DATTR_STARTRUN  = 0x080000000000u, /* start of redraw run */
-  DATTR_MASK      = 0x0F0000000000u,
+  DATTR_MASK      = TATTR_RIGHTCURS | TATTR_PASCURS | TATTR_ACTCURS
+                    | TATTR_COMBINING | DATTR_STARTRUN
 };
 
 /* Line attributes.
@@ -226,6 +231,7 @@ typedef enum {
   CSET_ASCII = 'B',   /* Normal ASCII charset */
   CSET_GBCHR = 'A',   /* UK variant */
   CSET_LINEDRW = '0', /* Line drawing charset */
+  CSET_TECH = '>',    /* DEC Technical */
   CSET_OEM = 'U'      /* OEM Codepage 437 */
 } term_cset;
 
@@ -274,10 +280,11 @@ typedef struct {
   bool autowrap;  // switchable (xterm Wraparound Mode (DECAWM Auto Wrap))
   bool wrapnext;
   bool rev_wrap;  // switchable (xterm Reverse-wraparound Mode)
-  bool utf;
-  bool g1;
-  term_cset csets[2];
+  short g0123;
+  term_cset csets[4];
+  term_cset cset_single;
   uchar oem_acs;
+  bool utf;
 } term_cursor;
 
 typedef struct {
@@ -344,6 +351,7 @@ struct term {
   bool reset_132;         /* Flag ESC c resets to 80 cols */
   bool cblinker;          /* When blinking is the cursor on ? */
   bool tblinker;          /* When the blinking text is on */
+  bool tblinker2;         /* When fast blinking is on */
   bool blink_is_real;     /* Actually blink blinking text */
   bool echoing;           /* Does terminal want local echo? */
   bool insert;            /* Insert mode */
