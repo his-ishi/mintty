@@ -97,6 +97,7 @@ typedef enum {UND_LINE, UND_FONT} UND_MODE;
 // font family properties
 struct fontfam {
   wstring name;
+  wstring name_reported;
   int weight;
   bool isbold;
   HFONT fonts[FONT_MAXNO];
@@ -262,20 +263,19 @@ row_padding(int i, int e)
 }
 
 static void
-show_font_warning(wstring name, char * msg)
+show_font_warning(struct fontfam * ff, char * msg)
 {
   // suppress multiple font error messages
-  static wchar * msgfont = null;
-  if (msgfont && wcscmp(msgfont, name) == 0) {
+  if (ff->name_reported && wcscmp(ff->name_reported, ff->name) == 0) {
     return;
   }
   else {
-    if (msgfont)
-      free(msgfont);
-    msgfont = wcsdup(name);
+    if (ff->name_reported)
+      delete(ff->name_reported);
+    ff->name_reported = wcsdup(ff->name);
   }
 
-  char * fn = cs__wcstoutf(name);
+  char * fn = cs__wcstoutf(ff->name);
   char * fullmsg;
   int len = asprintf(&fullmsg, "%s:\n%s", msg, fn);
   free(fn);
@@ -368,14 +368,14 @@ adjust_font_weights(struct fontfam * ff)
 
   // check if no font found
   if (!font_found) {
-    show_font_warning(ff->name, _("Font not found, using system substitute"));
+    show_font_warning(ff, _("Font not found, using system substitute"));
     ff->fw_norm = 400;
     ff->fw_bold = 700;
     trace_font(("//\n"));
     return;
   }
   if (!ansi_found && !cs_found) {
-    show_font_warning(ff->name, _("Font has limited support for character ranges"));
+    show_font_warning(ff, _("Font has limited support for character ranges"));
   }
 
   // find available widths closest to selected widths
@@ -474,7 +474,7 @@ win_init_fontfamily(HDC dc, int findex)
   GetTextMetrics(dc, &tm);
   if (!tm.tmHeight) {
     // corrupt font installation (e.g. deleted font file)
-    show_font_warning(ff->name, _("Font installation corrupt, using system substitute"));
+    show_font_warning(ff, _("Font installation corrupt, using system substitute"));
     wstrset(&ff->name, W(""));
     ff->fonts[FONT_NORMAL] = create_font(ff->name, ff->fw_norm, false);
     GetObject(ff->fonts[FONT_NORMAL], sizeof(LOGFONT), &logfont);
@@ -487,7 +487,7 @@ win_init_fontfamily(HDC dc, int findex)
 #ifdef check_charset_only_for_returned_font
   int default_charset = get_default_charset();
   if (tm.tmCharSet != default_charset && default_charset != DEFAULT_CHARSET) {
-    show_font_warning(ff->name, _("Font does not support system locale"));
+    show_font_warning(ff, _("Font does not support system locale"));
   }
 #endif
 
@@ -673,6 +673,7 @@ win_init_fonts(int size)
     font_height =
       font_size > 0 ? -MulDiv(font_size, GetDeviceCaps(dc, LOGPIXELSY), 72) : -font_size;
 
+  static bool initinit = true;
   for (uint fi = 0; fi < lengthof(fontfamilies); fi++) {
     if (!fi) {
       fontfamilies[fi].name = cfg.font.name;
@@ -684,8 +685,12 @@ win_init_fonts(int size)
       fontfamilies[fi].weight = cfg.fontfams[fi].weight;
       fontfamilies[fi].isbold = false;
     }
+    if (initinit)
+      fontfamilies[fi].name_reported = null;
+
     win_init_fontfamily(dc, fi);
   }
+  initinit = false;
 
   ReleaseDC(wnd, dc);
 }
@@ -1123,32 +1128,33 @@ combsubst(wchar comb)
   static const struct {
     wchar comb;
     wchar subst;
+    short pref;  // -1: suppress, +1: enforce
   } lookup[] = {
-    {0x0300, 0x0060},
-    {0x0301, 0x00B4},
-    {0x0302, 0x02C6},
-    {0x0303, 0x02DC},
-    {0x0304, 0x00AF},
-    {0x0305, 0x203E},
-    {0x0306, 0x02D8},
-    {0x0307, 0x02D9},
-    {0x0308, 0x00A8},
-    {0x030A, 0x02DA},
-    {0x030B, 0x02DD},
-    {0x030C, 0x02C7},
-    {0x0327, 0x00B8},
-    {0x0328, 0x02DB},
-    {0x0332, 0x005F},
-    {0x0333, 0x2017},
-    {0x033E, 0x2E2F},
-    {0x0342, 0x1FC0},
-    {0x0343, 0x1FBD},
-    {0x0344, 0x0385},
-    {0x0345, 0x037A},
-    {0x3099, 0x309B},
-    {0x309A, 0x309C},
-    {0xA67C, 0xA67E},
-    {0xA67D, 0xA67F},
+    {0x0300, 0x0060, 0},
+    {0x0301, 0x00B4, 0},
+    {0x0302, 0x02C6, 0},
+    {0x0303, 0x02DC, 0},
+    {0x0304, 0x00AF, 0},
+    {0x0305, 0x203E, 0},
+    {0x0306, 0x02D8, 0},
+    {0x0307, 0x02D9, 0},
+    {0x0308, 0x00A8, 0},
+    {0x030A, 0x02DA, 0},
+    {0x030B, 0x02DD, 0},
+    {0x030C, 0x02C7, 0},
+    {0x0327, 0x00B8, 0},
+    {0x0328, 0x02DB, 0},
+    {0x0332, 0x005F, 0},
+    {0x0333, 0x2017, 0},
+    {0x033E, 0x2E2F, -1},	// display broken if substituted
+    {0x0342, 0x1FC0, +1},	// display broken if not substituted
+    {0x0343, 0x1FBD, 0},
+    {0x0344, 0x0385, +1},	// display broken if not substituted
+    {0x0345, 0x037A, +1},	// display broken if not substituted
+    {0x3099, 0x309B, 0},
+    {0x309A, 0x309C, 0},
+    {0xA67C, 0xA67E, 0},
+    {0xA67D, 0xA67F, 0},
   };
 
   int i, j, k;
@@ -1162,8 +1168,20 @@ combsubst(wchar comb)
       j = k;
     else if (comb > lookup[k].comb)
       i = k;
-    else
-      return lookup[k].subst;
+    else {
+      // apply heuristic tweaking of the substitution:
+      if (lookup[k].pref == 1)
+        return lookup[k].subst;
+      else if (lookup[k].pref == -1)
+        return comb;
+
+      wchar chk = comb;
+      win_check_glyphs(&chk, 1);
+      if (chk)
+        return lookup[k].subst;
+      else
+        return comb;
+    }
   }
   return comb;
 }
@@ -1406,8 +1424,6 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, ushort
 
   bool combining = attr.attr & TATTR_COMBINING;
   bool combining_double = attr.attr & TATTR_COMBDOUBL;
-  if (combining_double)
-    combining = false;
 
   bool let_windows_combine = false;
   if (combining) {
@@ -1454,13 +1470,14 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, ushort
   if (clearpad)
     box.right += PADDING;
   RECT box2 = box;
-  if (combining_double) {
-    box2.left -= char_width;
-  }
+  if (combining_double)
+    box2.right += char_width;
 
 
  /* Uniscribe handling */
   bool use_uniscribe = cfg.font_render == FR_UNISCRIBE && !has_rtl;
+  if (combining_double)
+    use_uniscribe = false;
   if (use_uniscribe) {
     use_uniscribe = false;
     for (int i = 0; i < len; i++)
@@ -1494,6 +1511,14 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, ushort
   {
     if (cch == 0)
       return;
+#ifdef debug_text_out
+    if (*psz >= 0x80) {
+      printf("@%3d (%3d):", x, y);
+      for (int i = 0; i < cch; i++)
+        printf(" %04X", psz[i]);
+      printf("\n");
+    }
+#endif
 
     if (use_uniscribe)
       ScriptStringOut(ssa, x, y, fuOptions, prc, 0, 0, FALSE);
@@ -1576,7 +1601,7 @@ win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, ushort
 
         int xx = xt + xoff;
         if (combining_double && combiningdouble(text[i]))
-          xx -= char_width / 2;
+          xx += char_width / 2;
         if (!termattrs_equal_fg(&textattr[i], &textattr[i - 1])) {
           // determine colour to be used for combining characters;
           // simplified version of the algorithm above
@@ -1952,7 +1977,15 @@ win_char_width(xchar c)
     return wid;
   }
 
-  if (ambigwide(c)) {
+  if (ambigwide(c) &&
+      (c == 0x20AC  // €
+      || (c >= 0x2100 && c <= 0x23FF)   // Letterlike, Number Forms, Arrows, Math Operators, Misc Technical
+      || (c >= 0x2460 && c <= 0x24FF)   // Enclosed Alphanumerics
+      || (c >= 0x2600 && c <= 0x27BF)   // Miscellaneous Symbols, Dingbats
+      || (c >= 0x2B00 && c <= 0x2BFF)   // Miscellaneous Symbols and Arrows
+      || (c >= 0x1F100 && c <= 0x1F1FF) // Enclosed Alphanumeric Supplement
+      )
+     ) {
     int mbuf = act_char_width(c);
 # ifdef debug_win_char_width
     if (c > '~' || c == 'A') {
