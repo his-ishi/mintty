@@ -109,9 +109,12 @@ also resolving a leading Windows environment variable (like %SystemRoot%).
 \fB-l\fP, \fB--log\fP \fIFILE\fP|\fB-\fP
 Copy all output into the specified log file, or standard output if a dash is
 given instead of a file name.
+(Implies \fB-o Logging=yes\fP.)
+
 If FILE contains \fB%d\fP it will be substituted with the process ID.
 See description of equivalent option "Log file" (Log=) below 
 for further formatting options and hints.
+
 Note that logging can be toggled from the extended context menu.
 
 .TP
@@ -251,9 +254,23 @@ using the Linux path name.
 namespace and converted before opening in Windows.
 
 .TP
+\fB--WSL\fP \fIWSL DISTRIBUTION NAME\fP
+Run a WSL session, setting other parameters as appropriate and involving 
+the \fIwslbridge\fP gateway implicitly.
+If the distribution name is empty (\fB--WSL=\fP), the default WSL 
+installation is run; otherwise, it refers to the installed WSL packages 
+as listed by the Windows tool \fBwslconfig /l\fP.
+Implies \fB--wsl -o Locale=C -o Charset=UTF-8\fP, \fB--rootfs=\fP..., 
+and \fB--icon=\fP... if a respective icon file exists for the distribution.
+
+.TP
 \fB--rootfs\fP \fIROOTFOLDER\fP
 Provide the root filesystem folder to adjust path conversion properly 
 for the respective WSL installation.
+
+.TP
+\fB-~\fP
+Start in the user's home directory. Affects also WSL sessions.
 
 .TP
 \fB-H\fP, \fB--help\fP
@@ -437,6 +454,18 @@ For example, this allows to refer to past commands while editing a file.
 The \fBCtrl+Tab\fP and \fBCtrl+Shift+Tab\fP shortcuts can be used to switch
 between mintty windows.  Minimised windows are skipped.
 
+.SS Virtual Tabs
+
+The Virtual Tabs feature provides a list of all running mintty sessions 
+as well as configurable launch parameters for new sessions.
+By default, the list is shown in the extended context menu (Ctrl+right-click), 
+the mouse button 5 menu, and the menus opened with the Ctrl+Menu key 
+and the Ctrl+Shift+I shortcut (if enabled).
+(Menu contents for the various context menu invocations is configurable.)
+For configuration, see settings \fBSessionCommands\fP, \fBMenu*\fP, 
+and \fBSessionGeomSync\fP.
+Distinct sets of sessions can be set up with the setting \fB-o Class=...\fP.
+
 .SS Closing a session
 
 Clicking the window's close button, pressing \fBAlt+F4\fP, or choosing
@@ -458,6 +487,9 @@ Holding down \fBShift\fP overrides mouse tracking mode and sends mouse
 events to the window instead, so that e.g. text can be selected and the 
 context menu can be accessed.
 
+Mintty supports 5-button mice, handling mouse buttons 4 / 5 like 
+Alt+click-left / right in most mouse modes.
+
 .SS Alt codes
 
 The Windows Alt+Numpad method for entering character codes is supported,
@@ -475,7 +507,7 @@ For UTF-8 and other Unicode encodings such as GB18030, the entered code is
 interpreted as a Unicode codepoint and encoded accordingly before it is sent.
 For other encodings, the entered code is sent as is. 
 If it doesn't fit into one byte, it is sent as multiple bytes, with 
-the the most significant non-zero byte first.
+the most significant non-zero byte first.
 
 .SS Shortcuts
 
@@ -690,8 +722,8 @@ the system ANSI encoding.
 command-line.)
 .br
 Unicode-enabled settings: BellFile, ThemeFile, Title, ExitTitle, Icon, Log, 
-Language, Font, Printer, Answerback, SixelClipChars, 
-Class, AppID, AppName, AppLaunchCmd, DropCommands, UserCommands.
+Language, Font, Font1..., FontSample, Printer, Answerback, SixelClipChars, 
+Class, AppID, AppName, AppLaunchCmd, DropCommands, UserCommands, SessionCommands.
 
 Be careful when running multiple instances of mintty. If options are saved 
 from different instances, or the config file is edited manually, 
@@ -743,10 +775,13 @@ The popup offers theme files as stored in a resource subdirectory
 The option can also be set to a filename (like D:/.../solarized-light.minttyrc).
 
 The field can also be used as a drag-and-drop target for colour schemes 
-downloaded from the Color Scheme Configurator, or for theme files from the web 
-(note that the program \fBcurl\fP needs to be installed for the latter option).
+downloaded from the Color Scheme Configurator, or for theme files from the web.
 See the Tips wiki page \fIhttps://github.com/mintty/mintty/wiki/Tips#using-colour-schemes-themes\fP 
 about this mechanism.
+
+Note: Mintty also provides the command-line script \fBmintheme\fP which can 
+display the themes available in the mintty configuration directories or 
+activate one of them in the current mintty window.
 
 .TP
 \fBTransparency\fP (Transparency=off)
@@ -826,10 +861,13 @@ If a font family has no bold weight but boldness was requested, mintty
 does not adhere to this scheme but enforces bold font selection; however, 
 in this case the bold attribute may not be effective.
 .br
-\(en \fBAlternative fonts\fP (Font1= ... Font9= , Font1Weight= ... Font9Weight=):
-With these settings, up to 9 alternative fonts (and optionally weights) 
+\(en \fBAlternative fonts\fP (Font1= ... Font10= , Font1Weight= ... Font10Weight=):
+With these settings, up to 10 alternative fonts (and optionally weights) 
 can be configured which would then be selectable via ECMA-48 SGR character attributes 
 (see Tips wiki page \fIhttps://github.com/mintty/mintty/wiki/Tips#text-attributes-and-rendering\fP).
+\fINote:\fP Font10 has a special preference property; if it is not configured, 
+mintty will try to activate it anyway, looking for an installed 
+Fraktur or Blackletter font (ECMA-48 "Gothic").
 \fINote:\fP The control sequence for alternative font 1 overrides the identical 
 control sequence to select the VGA character set, which would thus be disabled. 
 Configuring alternative font 1 is therefore discouraged.
@@ -932,6 +970,12 @@ selected locale and character set.
 unrelated to the terminal character set (e.g. LC_MESSAGES) are cleared 
 to avoid confusion.
 
+\fINote:\fP If the locale option is set, mintty further checks whether 
+the locale is a "wide" locale (i.e. ambiguous-width characters are wide 
+in the locale) but the selected font is actually "ambiguous-narrow" 
+(i.e. ambiguous-width characters are narrow in the font) in which case it 
+appends the "@cjknarrow" locale modifier.
+
 .TP
 \fBCharacter set\fP (Charset=)
 The character set to be used for encoding input and decoding output.
@@ -985,6 +1029,12 @@ The "standard" Windows behaviour can be restored by ticking the checkbox here.
 
 The setting makes no difference for keys without AltGr key bindings
 (e.g. any key on the standard US layout).
+
+.TP
+\fBOld method of AltGr detection\fP (OldAltGrDetection=no)
+Setting this hidden option would disable a workaround for an 
+incompatibility in the Windows on-screen keyboard, 
+just in case is has any side effects.
 
 .TP
 \fBCopy and Paste shortcuts\fP (ClipShortcuts=yes)
@@ -1297,15 +1347,31 @@ Mintty can also play wave sounds or frequency beeps.
 \(en \fBWave\fP (BellFile=): 
 The popup offers wave files as stored in a resource subdirectory 
 \fIsounds\fP for selection. The option can also be set 
-to a filename (like D:/.../soundfile.wav).
+to a filename (like D:/.../soundfile.wav); this can be achieved also 
+by drag-and-drop from a local file.
 This setting overrides the Bell system sound except No Beep.
 .br
 \(en \fBPlay\fP: The button plays the selected sound for testing.
 The sound is also played when it is changed.
 .br
-\(en \fBFlash\fP (BellFlash=no): Briefly invert the foreground and background
-colours. (Corresponds to the xterm resource \fBvisualBell\fP.)
+\(en \fBFlash\fP (BellFlash=no): Briefly flash the terminal or window.
+(Corresponds to the xterm resource \fBvisualBell\fP.)
 .br
+\(en \fBFlash style\fP (BellFlashStyle=4): Tune the style to flash the 
+terminal or window; this is a bitmask composed of the following values:
+.RS
+\fB1\fP : Flash the window frame (using Windows)
+.br
+\fB2\fP : Flash the outer character cells; not recommended;
+  will look ragged with double-width characters
+.br
+\fB4\fP : Flash the whole terminal pane (all character cells)
+.br
+\fB8\fP : cell flash briefly inverts foreground and background;
+  default is to moderately brighten the background colour
+.br
+\fB12\fP : (combining 4 and 8) classic bright full flash
+.RE
 \(en \fBHighlight in taskbar\fP (BellTaskbar=yes): Change the colour of mintty's
 taskbar entry if the mintty window is not active.
 (Corresponds to the xterm resource \fBbellIsUrgent\fP, 
@@ -1613,8 +1679,8 @@ Also X11 color names are supported.
 .TP
 \fBDownloaded colour scheme\fP (ColourScheme=)
 This setting is not intended for manual configuration. It can store a 
-colour scheme as downloaded from the Color Scheme Configurator or from 
-a theme file on the web via drag-and-drop to the Options menu.
+colour scheme as downloaded from the Color Scheme Configurator or from a 
+theme file on the web via drag-and-drop to the Theme of the Options menu.
 After the colour scheme is stored to a colour scheme file, this setting 
 is not used anymore.
 
@@ -1630,6 +1696,17 @@ The default is \fInone\fP, meaning that a brightened colour derived from
 the effective foreground colour is used.
 The bold substitution colour can also be set and reset with the respective xterm OSC 
 control sequences.
+
+.TP
+\fBSelection highlight colours\fP
+The highlighting colours of selected text can be configured.
+.br
+\(en \fBHighlightBackgroundColour\fP= selected text background 
+(corresponds to the xterm resource \fBhighlightColor\fP)
+.br
+\(en \fBHighlightForegroundColour\fP= selected text colour 
+(corresponds to the xterm resource \fBhighlightTextColor\fP 
+with \fBhighlightColorMode\fP); only effective if both are configured
 
 .TP
 \fBScrollback search colours\fP
@@ -1786,6 +1863,72 @@ Examples:
 
 \fINote:\fP Control characters need to be embedded verbatim; there is no escape notation.
 
+.TP
+\fBSession launcher commands\fP (SessionCommands=)
+This setting lists mintty invocation parameters for the session launcher.
+The value is a series of semicolon-separated, colon-combined 
+pairs of session launch names (used as menu item labels) and 
+configuration parameter lists; when selecting one of the launch names, 
+mintty is invoked with the respective parameters.
+(If a semicolon shall be embedded into any of the command patterns, 
+a non-whitespace control character (i.e. none of \fB^I^J^K^L^M\fP) can be 
+specified as an alternative separator by starting the whole setting with it.)
+
+\fINote:\fP Session launch names are subject to localization if they are 
+added to the localization file of the selected UI localization language 
+(in subdirectory \fIlang\fP of a mintty resource directory).
+
+\fINote:\fP This is an experimental feature, with an experimental configuration format.
+
+Examples:
+.br
+\(en \fBSessionCommands=big:-w max;Ubuntu:--WSL=Ubuntu;mybox:ssh mybox\fP
+
+\fINote:\fP Control characters need to be embedded verbatim; there is no escape notation.
+
+.TP
+\fBMenu contents\fP
+These settings allow to customize the context menu as opened in various ways.
+.br
+\(en \fBMouse\fP (MenuMouse=b); the normal mouse-click context menu
+.br
+\(en \fBCtrl+Mouse\fP (MenuCtrlMouse=e|ls); the Ctrl+mouse-click menu
+.br
+\(en \fBMouse button 5\fP (MenuMouse5=ls); the mouse button 5 menu
+.br
+\(en \fBMenu key\fP (MenuMenu=bs); the Menu key (unless redefined)
+.br
+\(en \fBCtrl+Menu key\fP (MenuCtrlMenu=e|ls); the Ctrl+Menu-key
+
+Menu contents can be configured by a sequence of characters with the following meaning:
+.br
+\(en \fBb\fP: basic context menu
+.br
+\(en \fBe\fP: extended context menu
+.br
+\(en \fB|\fP: vertical separator, adding a new column
+.br
+\(en \fBl\fP: session launcher
+.br
+\(en \fBs\fP: session switcher (Virtual Tabs)
+.br
+\(en \fBT\fP: the menu is opened at the text cursor position
+.br
+\(en \fBP\fP: the menu is opened at the mouse pointer position
+
+.TP
+\fBSession geometry synchronization / Virtual tabs\fP (SessionGeomSync=0)
+This setting defines the level of approximation of "tabbed" window 
+operation within the Virtual Tabs feature:
+.br
+\(en \fB0\fP: no geometry handling; terminal session windows are separate
+.br
+\(en \fB1\fP: sync. position/size when switching/launching a session
+.br
+\(en \fB2\fP: (not implemented) also when window is moved or resized
+.br
+\(en \fB3\fP: (not implemented) always
+
 .SH LIMITATIONS
 
 .SS Console issue
@@ -1810,10 +1953,11 @@ instead, it simply pretends to be an xterm.
 
 .SS Missing xterm features
 
-Mintty is nowhere near as configurable as xterm.  Of xterm's keyboard modes,
-only the default PC-style and VT220-style are available.  8-bit control
-characters are not supported, nor are ISO2022 character sets.  There is no
-Tektronix 4014 emulation.  Mouse highlighting mode is not implemented.
+Mintty is nowhere near as configurable as xterm.  Of xterm's keyboard modes, 
+only the default PC-style and VT220-style are available.
+8-bit control characters are not supported.
+There is no Tektronix 4014 emulation.
+Mouse highlighting mode is not implemented.
 
 The majority of xterm's many control sequences is implemented, but quite a few
 are missing.  Significant omissions should be reported to the issue tracker.

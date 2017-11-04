@@ -24,6 +24,129 @@ static int transparency_pending = 0;
 
 /* Menu handling */
 
+static void
+append_commands(HMENU menu, wstring commands, UINT_PTR idm_cmd)
+{
+  char * cmds = cs__wcstoutf(commands);
+  char * cmdp = cmds;
+  int n = 0;
+  char sepch = ';';
+  if ((uchar)*cmdp <= (uchar)' ')
+    sepch = *cmdp++;
+
+  char * endp;
+  while ((endp = strchr(cmdp, ':'))) {
+    *endp = '\0';
+    AppendMenuW(menu, MF_ENABLED, idm_cmd + n, _W(cmdp));
+    n++;
+    cmdp = strchr(endp + 1, sepch);
+    if (cmdp)
+      cmdp++;
+    else
+      break;
+  }
+  free(cmds);
+}
+
+static int tabi;
+
+static BOOL CALLBACK
+wnd_enum_tabs(HWND curr_wnd, LPARAM menu)
+{
+  WINDOWINFO curr_wnd_info;
+  curr_wnd_info.cbSize = sizeof(WINDOWINFO);
+  GetWindowInfo(curr_wnd, &curr_wnd_info);
+  if (class_atom == curr_wnd_info.atomWindowType) {
+    int len = GetWindowTextLengthW(curr_wnd);
+    wchar title[len + 1];
+    len = GetWindowTextW(curr_wnd, title, len + 1);
+
+    AppendMenuW((HMENU)menu, MF_ENABLED, IDM_GOTAB + tabi, title);
+    MENUITEMINFOW mi;
+    mi.cbSize = sizeof(MENUITEMINFOW);
+    mi.fMask = MIIM_STATE;
+    mi.fState = // (IsIconic(curr_wnd) ? MFS_DISABLED : 0) |
+                (curr_wnd == wnd ? MFS_DEFAULT : 0);
+
+#define iconic_icon
+#ifdef iconic_icon
+    mi.fMask |= MIIM_BITMAP;
+    if (IsIconic(curr_wnd))
+      mi.hbmpItem = HBMMENU_POPUP_MINIMIZE;
+    else
+      mi.hbmpItem = HBMMENU_POPUP_MAXIMIZE;
+#endif
+
+#ifdef show_icon_from_window
+#warning does not work, ICON needs to be converted to BITMAP
+    //HICON icon = (HICON)SendMessage(curr_wnd, WM_GETICON, ICON_SMALL2, 96);
+    HICON icon = (HICON)GetClassLongPtr(curr_wnd, GCLP_HICONSM);
+    HBITMAP bitmap = (HBITMAP)icon;
+    if (icon) {
+      mi.fMask |= MIIM_BITMAP;
+      mi.hbmpItem = bitmap;
+# ifdef show_icon_via_itemdata
+      mi.fMask |= MIIM_DATA;
+      mi.hbmpItem = HBMMENU_SYSTEM;
+      mi.dwItemData = (ULONG_PTR)bitmap;
+# endif
+    }
+#endif
+
+#ifdef show_icon_via_callback
+#warning does not work
+    mi.fMask |= MIIM_BITMAP;
+    mi.hbmpItem = HBMMENU_CALLBACK;
+#endif
+
+#ifdef show_checkmarks
+#warning does not work
+    mi.fMask |= MIIM_CHECKMARKS;
+    mi.hbmpChecked = HBMMENU_POPUP_MAXIMIZE;
+    mi.hbmpUnchecked = HBMMENU_POPUP_MINIMIZE;
+    if (!IsIconic(curr_wnd))
+      mi.fState |= MFS_CHECKED;
+#endif
+
+    SetMenuItemInfoW((HMENU)menu, IDM_GOTAB + tabi, 0, &mi);
+    add_tab(tabi, curr_wnd);
+
+    tabi++;
+  }
+  return true;
+}
+
+static void
+add_switcher(HMENU menu, bool vsep, bool hsep)
+{
+  uint bar = vsep ? MF_MENUBARBREAK : 0;
+  //__ Context menu, session switcher ("virtual tabs")
+  if (hsep)
+    AppendMenuW(menu, MF_SEPARATOR, 0, 0);
+  AppendMenuW(menu, MF_DISABLED | bar, 0, _W("Session switcher"));
+  AppendMenuW(menu, MF_SEPARATOR, 0, 0);
+  tabi = 0;
+  clear_tabs();
+  EnumWindows(wnd_enum_tabs, (LPARAM)menu);
+}
+
+static bool
+add_launcher(HMENU menu, bool vsep, bool hsep)
+{
+  if (*cfg.session_commands) {
+    uint bar = vsep ? MF_MENUBARBREAK : 0;
+    //__ Context menu, session launcher ("virtual tabs")
+    if (hsep)
+      AppendMenuW(menu, MF_SEPARATOR, 0, 0);
+    AppendMenuW(menu, MF_DISABLED | bar, 0, _W("Session launcher"));
+    AppendMenuW(menu, MF_SEPARATOR, 0, 0);
+    append_commands(menu, cfg.session_commands, IDM_SESSIONCOMMAND);
+    return true;
+  }
+  else
+    return false;
+}
+
 #define dont_debug_modify_menu
 
 void
@@ -252,7 +375,6 @@ win_init_ctxmenu(bool extended_menu)
 #ifdef debug_modify_menu
   printf("win_init_ctxmenu\n");
 #endif
-  ctxmenu = CreatePopupMenu();
   //__ Context menu:
   AppendMenuW(ctxmenu, MF_ENABLED, IDM_OPEN, _W("Ope&n"));
   AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
@@ -281,26 +403,7 @@ win_init_ctxmenu(bool extended_menu)
   AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
 
   if (extended_menu && *cfg.user_commands) {
-    char * cmds = cs__wcstoutf(cfg.user_commands);
-    char * cmdp = cmds;
-    int n = 0;
-    char sepch = ';';
-    if ((uchar)*cmdp <= (uchar)' ')
-      sepch = *cmdp++;
-
-    char * endp;
-    while ((endp = strchr(cmdp, ':'))) {
-      *endp = '\0';
-      AppendMenuW(ctxmenu, MF_ENABLED, IDM_USERCOMMAND + n, _W(cmdp));
-      n++;
-      cmdp = strchr(endp + 1, sepch);
-      if (cmdp)
-        cmdp++;
-      else
-        break;
-    }
-    free(cmds);
-
+    append_commands(ctxmenu, cfg.user_commands, IDM_USERCOMMAND);
     AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
   }
 
@@ -314,7 +417,6 @@ win_init_menus(void)
 #ifdef debug_modify_menu
   printf("win_init_menus\n");
 #endif
-  //win_init_ctxmenu();  // rather do this every time when opened
 
   sysmenu = GetSystemMenu(wnd, false);
   //__ System menu:
@@ -326,7 +428,7 @@ win_init_menus(void)
 }
 
 static void
-open_popup_menu(POINT * p, mod_keys mods)
+open_popup_menu(bool use_text_cursor, string menucfg, mod_keys mods)
 {
   /* Create a new context menu structure every time the menu is opened.
      This was a fruitless attempt to achieve its proper DPI scaling.
@@ -336,21 +438,60 @@ open_popup_menu(POINT * p, mod_keys mods)
   if (ctxmenu)
     DestroyMenu(ctxmenu);
 
-  win_init_ctxmenu(mods & MDK_CTRL);
+  ctxmenu = CreatePopupMenu();
+
+  if (!menucfg) {
+    if (mods & MDK_ALT)
+      menucfg = *cfg.menu_altmouse ? cfg.menu_altmouse : "ls";
+    else if (mods & MDK_CTRL)
+      menucfg = *cfg.menu_ctrlmouse ? cfg.menu_ctrlmouse : "e|ls";
+    else
+      menucfg = *cfg.menu_mouse ? cfg.menu_mouse : "b";
+  }
+
+  bool vsep = false;
+  bool hsep = false;
+  while (*menucfg) {
+    if (*menucfg == '|')
+      vsep = true;
+    else if (!strchr(menucfg + 1, *menucfg)) {
+      // suppress duplicates except separators
+      bool ok = true;
+      switch (*menucfg) {
+        when 'b': if (!strchr(menucfg, 'e'))
+                    win_init_ctxmenu(false);
+        when 'e': win_init_ctxmenu(true);
+        when 's': add_switcher(ctxmenu, vsep, hsep & !vsep);
+        when 'l': ok = add_launcher(ctxmenu, vsep, hsep & !vsep);
+        when 'T': use_text_cursor = true;
+        when 'P': use_text_cursor = false;
+      }
+      if (ok) {
+        vsep = false;
+        hsep = true;
+      }
+    }
+    menucfg++;
+  }
   win_update_menus();
 
+  POINT p;
+  if (use_text_cursor) {
+    GetCaretPos(&p);
+    ClientToScreen(wnd, &p);
+  }
+  else
+    GetCursorPos(&p);
   TrackPopupMenu(
     ctxmenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
-    p->x, p->y, 0, wnd, null
+    p.x, p.y, 0, wnd, null
   );
 }
 
 void
 win_popup_menu(mod_keys mods)
 {
-  POINT p;
-  GetCursorPos(&p);
-  open_popup_menu(&p, mods);
+  open_popup_menu(false, null, mods);
 }
 
 
@@ -436,6 +577,7 @@ translate_pos(int x, int y)
 
 static LPARAM last_lp = -1;
 static pos last_pos = {-1, -1};
+static int button_state = 0;
 
 static pos
 get_mouse_pos(LPARAM lp)
@@ -469,6 +611,17 @@ win_mouse_click(mouse_button b, LPARAM lp)
   last_button = b;
   if (alt_state > ALT_NONE)
     alt_state = ALT_CANCELLED;
+  switch (b) {
+    when MBT_RIGHT:
+      button_state |= 1;
+    when MBT_MIDDLE:
+      button_state |= 2;
+    when MBT_LEFT:
+      button_state |= 4;
+    when MBT_4:
+      button_state |= 8;
+    otherwise:;
+  }
 }
 
 void
@@ -476,6 +629,17 @@ win_mouse_release(mouse_button b, LPARAM lp)
 {
   term_mouse_release(b, get_mods(), get_mouse_pos(lp));
   ReleaseCapture();
+  switch (b) {
+    when MBT_RIGHT:
+      button_state &= ~1;
+    when MBT_MIDDLE:
+      button_state &= ~2;
+    when MBT_LEFT:
+      button_state &= ~4;
+    when MBT_4:
+      button_state &= ~8;
+    otherwise:;
+  }
 }
 
 void
@@ -507,6 +671,26 @@ win_mouse_wheel(WPARAM wp, LPARAM lp)
   SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &lines_per_notch, 0);
 
   term_mouse_wheel(delta, lines_per_notch, get_mods(), tpos);
+}
+
+void
+win_get_locator_info(int *x, int *y, int *buttons, bool by_pixels)
+{
+  POINT p = {-1, -1};
+
+  if (GetCursorPos(&p)) {
+    if (ScreenToClient(wnd, &p)) {
+      if (by_pixels) {
+        *x = p.x - PADDING;
+        *y = p.y - PADDING;
+      } else {
+        *x = floorf((p.x - PADDING) / (float)cell_width);
+        *y = floorf((p.y - PADDING) / (float)cell_height);
+      }
+    }
+  }
+
+  *buttons = button_state;
 }
 
 
@@ -665,6 +849,24 @@ win_key_down(WPARAM wp, LPARAM lp)
   GetKeyboardState(kbd);
   inline bool is_key_down(uchar vk) { return kbd[vk] & 0x80; }
 
+  // Fix AltGr detection;
+  // workaround for broken Windows on-screen keyboard (#692)
+  if (!cfg.old_altgr_detection) {
+    static bool lmenu_tweak = false;
+    if (key == VK_MENU && !scancode) {
+      extended = true;
+      scancode = 312;
+      kbd[VK_LMENU] = 0x00;
+      kbd[VK_RMENU] = 0x80;
+      lmenu_tweak = true;
+    }
+    else if (lmenu_tweak) {
+      kbd[VK_LMENU] = 0x00;
+      kbd[VK_RMENU] = 0x80;
+      lmenu_tweak = false;
+    }
+  }
+
   // Distinguish real LCONTROL keypresses from fake messages sent for AltGr.
   // It's a fake if the next message is an RMENU with the same timestamp.
   if (key == VK_CONTROL && !extended) {
@@ -708,10 +910,9 @@ win_key_down(WPARAM wp, LPARAM lp)
       send_syscommand(SC_KEYMENU);
     else {
       win_show_mouse();
-      POINT p;
-      GetCaretPos(&p);
-      ClientToScreen(wnd, &p);
-      open_popup_menu(&p, mods);
+      open_popup_menu(false, 
+                      mods & MDK_CTRL ? cfg.menu_ctrlmenu : cfg.menu_menu, 
+                      mods);
     }
     return true;
   }
@@ -825,6 +1026,7 @@ win_key_down(WPARAM wp, LPARAM lp)
         when 'A': term_select_all();
         when 'C': term_copy();
         when 'V': win_paste();
+        when 'I': open_popup_menu(true, "ls", mods);
         when 'N': send_syscommand(IDM_NEW);
         when 'W': send_syscommand(SC_CLOSE);
         when 'R': send_syscommand(IDM_RESET);

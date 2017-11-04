@@ -24,8 +24,11 @@ extern void win_schedule_update(void);
 extern void do_update(void);
 
 extern void win_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, ushort lattr, bool has_rtl);
+
 extern void win_update_mouse(void);
 extern void win_capture_mouse(void);
+extern void win_get_locator_info(int *x, int *y, int *buttons, bool by_pixels);
+
 extern void win_bell(config *);
 
 extern void win_set_title(char *);
@@ -39,6 +42,8 @@ extern colour win_get_colour(colour_i);
 extern void win_set_colour(colour_i, colour);
 extern void win_reset_colours(void);
 extern colour win_get_sys_colour(bool fg);
+extern uint colour_dist(colour a, colour b);
+extern colour truecolour(cattr *, colour bg);
 
 extern void win_invalidate_all(void);
 

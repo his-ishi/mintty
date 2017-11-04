@@ -221,12 +221,60 @@ typedef enum {
   MA_MOVE = 1,
   MA_WHEEL = 2,
   MA_RELEASE = 3
-} mouse_action;
+} mouse_action;  // values are significant, used for calculation!
 
 static void
 send_mouse_event(mouse_action a, mouse_button b, mod_keys mods, pos p)
 {
+  if (term.mouse_mode == MM_LOCATOR) {
+    // handle DECSLE: select locator events
+    if ((a == MA_CLICK && term.locator_report_up)
+     || (a == MA_RELEASE && term.locator_report_dn)) {
+      int pe = 0;
+      switch (b) {
+        when MBT_LEFT:
+          pe = a == MA_CLICK ? 2 : 3;
+        when MBT_MIDDLE:
+          pe = a == MA_CLICK ? 4 : 5;
+        when MBT_RIGHT:
+          pe = a == MA_CLICK ? 6 : 7;
+        when MBT_4:
+          pe = a == MA_CLICK ? 8 : 9;
+        otherwise:;
+      }
+      if (pe) {
+        int x, y, buttons;
+        win_get_locator_info(&x, &y, &buttons, term.locator_by_pixels);
+        child_printf("\e[%d;%d;%d;%d;0&w", pe, buttons, y, x);
+        term.locator_rectangle = false;
+      }
+    }
+    // handle DECEFR: enable filter rectangle
+    else if (a == MA_MOVE && term.locator_rectangle) {
+      /* Anytime the locator is detected outside of the filter
+         rectangle, an outside rectangle event is generated and the
+         rectangle is disabled.
+      */
+      int x, y, buttons;
+      win_get_locator_info(&x, &y, &buttons, term.locator_by_pixels);
+      if (x < term.locator_left || x > term.locator_right
+          || y < term.locator_top || y > term.locator_bottom) {
+        child_printf("\e[10;%d;%d;%d;0&w", buttons, y, x);
+        term.locator_rectangle = false;
+      }
+    }
+    return;
+  }
+
   uint x = p.x + 1, y = p.y + 1;
+
+  switch (b) {
+    when MBT_4:
+      b = MBT_LEFT; mods |= MDK_ALT;
+    when MBT_5:
+      b = MBT_RIGHT; mods |= MDK_ALT;
+    otherwise:;
+  }
 
   uint code = b ? b - 1 : 0x3;
 
@@ -318,6 +366,8 @@ send_keys(char *code, uint len, uint count)
 static bool
 is_app_mouse(mod_keys *mods_p)
 {
+  if (term.locator_1_enabled)
+    return true;
   if (!term.mouse_mode || term.show_other_screen)
     return false;
   bool override = *mods_p & cfg.click_target_mod;
@@ -335,13 +385,28 @@ term_mouse_click(mouse_button b, mod_keys mods, pos p, int count)
     term.mouse_state = b;
   }
   else {
+    // generic transformation M4/M5 -> Alt+left/right;
+    // if any specific handling is designed for M4/M5, this needs to be tweaked
+    bool fake_alt = false;
+    switch (b) {
+      when MBT_4:
+        b = MBT_LEFT; mods |= MDK_ALT; fake_alt = true;
+      when MBT_5:
+        b = MBT_RIGHT; mods |= MDK_ALT; fake_alt = true;
+      otherwise:;
+    }
+
     bool alt = mods & MDK_ALT;
     bool shift_or_ctrl = mods & (MDK_SHIFT | MDK_CTRL);
     int mca = cfg.middle_click_action;
     int rca = cfg.right_click_action;
     term.mouse_state = 0;
     if (b == MBT_RIGHT && (rca == RC_MENU || shift_or_ctrl)) {
-      if (!alt)
+      // disable Alt+mouse menu opening;
+      // the menu would often be closed soon by auto-repeat Alt, sending
+      // WM_CAPTURECHANGED, WM_UNINITMENUPOPUP, WM_MENUSELECT, WM_EXITMENULOOP
+      // trying to ignore WM_CAPTURECHANGED does not help
+      if (!alt || fake_alt)
         win_popup_menu(mods);
     }
     else if (b == MBT_MIDDLE && (mods & ~MDK_SHIFT) == MDK_CTRL) {

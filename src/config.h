@@ -12,6 +12,7 @@ enum { FR_TEXTOUT, FR_UNISCRIBE };
 enum { MC_VOID, MC_PASTE, MC_EXTEND, MC_ENTER };
 enum { RC_MENU, RC_PASTE, RC_EXTEND, RC_ENTER };
 enum { TR_OFF = 0, TR_LOW = 16, TR_MEDIUM = 32, TR_HIGH = 48, TR_GLASS = -1 };
+enum { FLASH_FRAME = 1, FLASH_BORDER = 2, FLASH_FULL = 4, FLASH_REVERSE = 8 };
 
 
 // Colour values.
@@ -46,6 +47,7 @@ typedef struct {
   // Looks
   colour fg_colour, bold_colour, bg_colour, cursor_colour, underl_colour;
   bool underl_manual;
+  colour sel_fg_colour, sel_bg_colour;
   colour search_fg_colour, search_bg_colour, search_current_colour;
   wstring theme_file;
   string colour_scheme;
@@ -56,7 +58,7 @@ typedef struct {
   bool cursor_blinks;
   // Text
   font_spec font;
-  font_spec fontfams[10];
+  font_spec fontfams[11];
   wstring font_sample;
   bool show_hidden_fonts;
   char font_smoothing;
@@ -71,6 +73,7 @@ typedef struct {
   bool backspace_sends_bs;
   bool delete_sends_del;
   bool ctrl_alt_is_altgr;
+  bool old_altgr_detection;
   bool clip_shortcuts;
   bool window_shortcuts;
   bool switch_shortcuts;
@@ -115,6 +118,7 @@ typedef struct {
   int bell_freq;
   int bell_len;
   bool bell_flash;   // xterm: visualBell
+  int bell_flash_style;
   bool bell_taskbar; // xterm: bellIsUrgent
   bool bell_popup;   // xterm: popOnBell
   wstring printer;
@@ -142,6 +146,13 @@ typedef struct {
   wstring app_launch_cmd;
   wstring drop_commands;
   wstring user_commands;
+  wstring session_commands;
+  string menu_mouse;
+  string menu_ctrlmouse;
+  string menu_altmouse;
+  string menu_menu;
+  string menu_ctrlmenu;
+  int geom_sync;
   int col_spacing, row_spacing;
   int padding;
   bool handle_dpichanged;

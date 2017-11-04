@@ -355,14 +355,12 @@ are not saved to this file, or with the new setting _ThemeFile_.
 
 In the Options menu, section _Looks_, the _Theme_ popup offers theme files 
 as stored in a resource directory for selection.
-This dialog field can be used in different ways:
+This dialog field (or the “Color Scheme Designer” button for drag-and-drop) 
+can be used in different ways:
 * Popup the selection to choose a theme configured in your resource directory
 * Insert a file name (e.g. by pasting or drag-and-drop from Windows Explorer)
 * Drag-and-drop a theme file from the Internet (may be embedded in HTML page)
 * Drag-and-drop a colour scheme directly from the Color Scheme Designer (see below)
-
-Note that the drag-and-drop theme file option needs the program ```curl```
-to be installed (and properly configured for a proxy if needed).
 
 After drag-and-drop of a colour scheme, you may Apply it for testing;
 to keep the scheme in your popup selection, assign a name to it by typing it 
@@ -384,8 +382,11 @@ click the “Store” button to store the colour scheme.
 
 A number of colour schemes have been published for mintty, e.g.
 * https://github.com/oumu/mintty-color-schemes
-* https://github.com/mavnn/mintty-colors-solarized
 * https://github.com/PhilipDaniels/mintty/tree/master/themes
+
+Mintty also provides the command-line script ```mintheme``` which can 
+display the themes available in the mintty configuration directories or 
+activate one of them in the current mintty window.
 
 
 ## Providing and selecting fonts ##
@@ -433,9 +434,11 @@ a collection of such fonts can be found at [Nerd Fonts](http://nerdfonts.com/).
 
 ### Alternative fonts ###
 
-Mintty supports up to 9 alternative fonts that can be selected as 
+Mintty supports up to 10 alternative fonts that can be selected as 
 character attributes (see Text attributes below). They are configured 
-in the config file (see manual page).
+in the config file (see manual page), except for font 10 which has a 
+default preference; mintty will try to find a Fraktur or Blackletter font 
+for it on your system.
 <img align=top src=https://github.com/mintty/mintty/wiki/mintty-alternative-fonts.png>
 
 
@@ -451,6 +454,15 @@ not need to be CJK), e.g.:
 
 ```
 LC_CTYPE=zh_SG.utf8 mintty &
+```
+
+If the locale is selected via the Locale setting, however, it is necessary 
+to choose an ambiguous-wide font in addition (CJK font), or mintty will 
+enforce the ambiguous-narrow mode of rendering by appending the 
+“@cjknarrow” locale modifier:
+
+```
+mintty -o Locale=zh_CN -o Font=FangSong &
 ```
 
 
@@ -508,6 +520,7 @@ Mintty supports a maximum of usual and unusual text attributes:
 | 12                     | 10                | alternative font 2            |
 | ...                    | 10                | alternative fonts 3...8       |
 | 19                     | 10                | alternative font 9            |
+| 20                     | 23, 10            | Fraktur/Blackletter font      |
 | 21                     | 24                | doubly underline              |
 | 53                     | 55                | overline                      |
 | 30...37                | 39                | foreground ANSI colour        |
@@ -519,6 +532,10 @@ Mintty supports a maximum of usual and unusual text attributes:
 | 38;2;R;G;B             | 39                | foreground true colour        |
 | 48;2;R;G;B             | 49                | background true colour        |
 | _any_                  | 0                 |                               |
+
+Note: The control sequences for Fraktur (“Gothic”) font are described 
+in EMCA-48, see also [wiki:ANSI code](https://en.wikipedia.org/wiki/ANSI_escape_code).
+To use this feature, it is suggested to install `F25 Blackletter Typewriter`.
 
 Note: The control sequence for alternative font 1 overrides the identical 
 control sequence to select the VGA character set. Configuring alternative 
@@ -576,6 +593,19 @@ unless the remote and local paths match.
 Note also that from a login terminal (e.g. using parameter `-` to start 
 a login shell), Alt+F2 starts again a login terminal, whose login shell 
 is likely to reset the working directory to the home directory.
+
+
+## Virtual Tabs ##
+
+The Virtual Tabs feature provides a list of all running mintty sessions 
+as well as configurable launch parameters for new sessions.
+By default, the list is shown in the extended context menu (Ctrl+right-click), 
+the mouse button 5 menu, and the menus opened with the Ctrl+Menu key 
+and the Ctrl+Shift+I shortcut (if enabled).
+(Menu contents for the various context menu invocations is configurable.)
+For configuration, see settings `SessionCommands`, `Menu*`, 
+and `SessionGeomSync`.
+Distinct sets of sessions can be set up with the setting `-o Class=...`.
 
 
 ## Multi-monitor support ##

@@ -47,8 +47,12 @@ typedef enum {
   CURSOR_COLOUR_I      = 261,
   IME_CURSOR_COLOUR_I  = 262,
 
+  // Selection highlight colours
+  SEL_COLOUR_I         = 263,
+  SEL_TEXT_COLOUR_I    = 264,
+
   // Number of colours
-  COLOUR_NUM = 263,
+  COLOUR_NUM = 265,
 
   // True Colour indicator
   // assert (TRUE_COLOUR % 4) == 0 so that checking x >= TRUE_COLOUR
@@ -234,7 +238,22 @@ typedef enum {
   CSET_GBCHR = 'A',   /* UK variant */
   CSET_LINEDRW = '0', /* Line drawing charset */
   CSET_TECH = '>',    /* DEC Technical */
-  CSET_OEM = 'U'      /* OEM Codepage 437 */
+  CSET_OEM = 'U',     /* OEM Codepage 437 */
+  // definitions for DEC Supplemental support:
+  CSET_DECSUPP = '<', // <      DEC Supplementary (VT200)
+  CSET_DECSPGR = '%', // % 5    DEC Supplementary Graphics (VT300)
+  // definitions for NRC support:
+  CSET_NL = '4', // 4           Dutch
+  CSET_FI = '5', // C or 5      Finnish
+  CSET_FR = 'R', // R or f      French
+  CSET_CA = 'Q', // Q or 9      French Canadian (VT200, VT300)
+  CSET_DE = 'K', // K           German
+  CSET_IT = 'Y', // Y           Italian
+  CSET_NO = '`', // ` or E or 6 Norwegian/Danish
+  CSET_PT = '6', // % 6         Portuguese (VT300)
+  CSET_ES = 'Z', // Z           Spanish
+  CSET_SE = '7', // H or 7      Swedish
+  CSET_CH = '=', // =           Swiss
 } term_cset;
 
 typedef struct {
@@ -242,7 +261,7 @@ typedef struct {
 } pos;
 
 typedef enum {
-  MBT_LEFT = 1, MBT_MIDDLE = 2, MBT_RIGHT = 3
+  MBT_LEFT = 1, MBT_MIDDLE = 2, MBT_RIGHT = 3, MBT_4 = 4, MBT_5 = 5
 } mouse_button;
 
 enum {
@@ -282,11 +301,12 @@ typedef struct {
   bool autowrap;  // switchable (xterm Wraparound Mode (DECAWM Auto Wrap))
   bool wrapnext;
   bool rev_wrap;  // switchable (xterm Reverse-wraparound Mode)
-  short g0123;
+  short gl, gr;
   term_cset csets[4];
   term_cset cset_single;
   uchar oem_acs;
   bool utf;
+  bool decnrc_enabled;    /* DECNRCM sequence to enable NRC? */
 } term_cursor;
 
 typedef struct {
@@ -436,7 +456,8 @@ struct term {
     MM_X10,       // just clicks
     MM_VT200,     // click and release
     MM_BTN_EVENT, // click, release, and drag with button down
-    MM_ANY_EVENT  // click, release, and any movement
+    MM_ANY_EVENT, // click, release, and any movement
+    MM_LOCATOR,   // DEC locator events
   } mouse_mode;
 
   // Mouse encoding
@@ -452,6 +473,13 @@ struct term {
     MS_SEL_CHAR = -1, MS_SEL_WORD = -2, MS_SEL_LINE = -3,
     MS_COPYING = -4, MS_PASTING = -5, MS_OPENING = -6
   } mouse_state;
+
+  bool locator_1_enabled;
+  bool locator_by_pixels;
+  bool locator_report_up;
+  bool locator_report_dn;
+  bool locator_rectangle;
+  int locator_top, locator_left, locator_bottom, locator_right;
 
   bool sel_rect, selected;
   pos sel_start, sel_end, sel_anchor;
@@ -489,7 +517,7 @@ extern struct term term;
 
 extern void term_resize(int, int);
 extern void term_scroll(int, int);
-extern void term_reset(void);
+extern void term_reset(bool full);
 extern void term_clear_scrollback(void);
 extern void term_mouse_click(mouse_button, mod_keys, pos, int count);
 extern void term_mouse_release(mouse_button, mod_keys, pos);
