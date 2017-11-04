@@ -1,3 +1,22 @@
+### 2.8.1 (31 Oct 2017) ###
+
+Character display
+  * Option Charwidth for built-in Unicode width or ambiguous wide mode (#88, #671).
+
+Window and session control
+  * Virtual Tabs: additional SessionGeomSync levels (#699).
+  * Window icons can optionally be shown in session switcher (#699).
+  * Restore window frame when leaving fullscreen mode via escape sequence.
+
+Pathname handling
+  * Relative pathname opening considers interactive working directory (~mintty/wsltty#19).
+  * Pathname opening accepts escaped space or embedding quotes (~mintty/wsltty#19).
+  * Relative pathname opening from WSL ignores improper directories (mintty/wsltty#19).
+
+WSL support
+  * Made WSL parameter optional: --WSL.
+  * Option --WSL supports legacy-only installation "Bash on Windows" (mintty/wsltty#64).
+
 ### 2.8.0 (22 Oct 2017) ###
 
 Window and session control
@@ -37,8 +56,9 @@ Character display
   * DEC Tech: tweaked √/Σ segments (hand-drawn), fixed double-size characters.
   * Fraktur font support (ANSI character attribute 20).
 
-Keyboard
+Keyboard and Mouse
   * Workaround for broken AltGr of Windows on-screen keyboard (#692).
+  * 5-button mouse support.
 
 Localization meanwhile available for (in alphabetical order of locale ids):
   * German, English (UK/US), Spanish, French, Japanese, Russian, Chinese.

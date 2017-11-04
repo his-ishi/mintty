@@ -252,14 +252,22 @@ using the Linux path name.
 .br
 \(en When Ctrl+clicking a file name, it will be interpreted in the Linux 
 namespace and converted before opening in Windows.
+.br
+\(en Options DropCommands and setting MINTTY_PROG for UserCommands are disabled.
+.br
+\(en The working directory of the current foreground process 
+(for click-opening pathnames) cannot be detected.
+.br
+\(en Locale modification (@cjk...) is disabled.
 
 .TP
 \fB--WSL\fP \fIWSL DISTRIBUTION NAME\fP
 Run a WSL session, setting other parameters as appropriate and involving 
-the \fIwslbridge\fP gateway implicitly.
-If the distribution name is empty (\fB--WSL=\fP), the default WSL 
-installation is run; otherwise, it refers to the installed WSL packages 
-as listed by the Windows tool \fBwslconfig /l\fP.
+the \fIwslbridge\fP gateway implicitly 
+(which should be installed in /bin for this purpose).
+If the distribution name is empty, the default WSL installation is run; 
+otherwise, it refers to the installed WSL packages as listed by the 
+Windows tool \fBwslconfig /l\fP.
 Implies \fB--wsl -o Locale=C -o Charset=UTF-8\fP, \fB--rootfs=\fP..., 
 and \fB--icon=\fP... if a respective icon file exists for the distribution.
 
@@ -349,9 +357,13 @@ Files, directories, URLs and web addresses beginning with "www." can be
 opened either by holding \fBCtrl\fP while left-clicking on them (or 
 double-clicking, if and as enabled by option OpeningClicks), or by 
 selecting them and choosing the \fBOpen\fP command from the context menu.
-Please note that a relative file or directory path is interpreted as relative 
-to the current working directory of the terminal foreground process if that 
-can be determined.
+Embedded spaces are considered if escaped with a backslash; for 
+selected pathnames, also embedding quote marks are considered.
+
+A relative pathname is interpreted as relative to the current working 
+directory of the terminal foreground process if that can be determined, 
+overridden by the working directory interactively communicated by the 
+respective control sequence.
 
 .SS Font zoom
 
@@ -456,8 +468,8 @@ between mintty windows.  Minimised windows are skipped.
 
 .SS Virtual Tabs
 
-The Virtual Tabs feature provides a list of all running mintty sessions 
-as well as configurable launch parameters for new sessions.
+The Virtual Tabs feature provides a list of all running mintty sessions (session switcher) 
+as well as configurable launch parameters for new sessions (session launcher).
 By default, the list is shown in the extended context menu (Ctrl+right-click), 
 the mouse button 5 menu, and the menus opened with the Ctrl+Menu key 
 and the Ctrl+Shift+I shortcut (if enabled).
@@ -770,7 +782,7 @@ Also X11 color names are supported.
 \(en \fBUnderline, Strikeout, Overline\fP (UnderlineColour=-1)
 
 \(en \fBTheme\fP (ThemeFile=): 
-The popup offers theme files as stored in a resource subdirectory 
+The popup menu offers theme files as stored in a resource subdirectory 
 \fIthemes\fP for selection as a colour scheme.
 The option can also be set to a filename (like D:/.../solarized-light.minttyrc).
 
@@ -975,6 +987,11 @@ the locale is a "wide" locale (i.e. ambiguous-width characters are wide
 in the locale) but the selected font is actually "ambiguous-narrow" 
 (i.e. ambiguous-width characters are narrow in the font) in which case it 
 appends the "@cjknarrow" locale modifier.
+
+By default, the selected locale also determines the character width 
+assumptions used for screen rendering. For exceptions, see the 
+setting \fBCharwidth\fP and the control sequences for special wide character handling 
+(\fIhttps://github.com/mintty/mintty/wiki/CtrlSeqs#wide-characters\fP).
 
 .TP
 \fBCharacter set\fP (Charset=)
@@ -1345,7 +1362,7 @@ Mintty can also play wave sounds or frequency beeps.
 \fB5\fP : Asterisk
 .RE
 \(en \fBWave\fP (BellFile=): 
-The popup offers wave files as stored in a resource subdirectory 
+The popup menu offers wave files as stored in a resource subdirectory 
 \fIsounds\fP for selection. The option can also be set 
 to a filename (like D:/.../soundfile.wav); this can be achieved also 
 by drag-and-drop from a local file.
@@ -1509,6 +1526,20 @@ distinguish different mintty windows.  The name defaults to "mintty".
 The following settings appear neither in the options dialog nor as command line
 options, which means they can only be set in config files or using the
 \fB--option\fP or \fB-o\fP command line option.
+
+.TP
+\fBCharacter width handling\fP (Charwidth=locale)
+With this option, locale-determined character width properties can be overridden:
+.br
+\(en \fBlocale\fP Use locale width properties.
+.br
+\(en \fBunicode\fP Use built-in width properties, 
+likely based on a more up-to-date Unicode version.
+(corresponds to the xterm resource \fBmkWidth\fP)
+.br
+\(en \fBambig-wide\fP Use built-in width properties, 
+with ambiguous-width characters assumed to be wide.
+(corresponds to the xterm resource \fBcjkWidth\fP)
 
 .TP
 \fBBidirectional rendering\fP (Bidi=2)
@@ -1915,6 +1946,8 @@ Menu contents can be configured by a sequence of characters with the following m
 \(en \fBT\fP: the menu is opened at the text cursor position
 .br
 \(en \fBP\fP: the menu is opened at the mouse pointer position
+.br
+\(en \fBW\fP: show window icon for uniconized windows in session switcher
 
 .TP
 \fBSession geometry synchronization / Virtual tabs\fP (SessionGeomSync=0)
@@ -1925,9 +1958,11 @@ operation within the Virtual Tabs feature:
 .br
 \(en \fB1\fP: sync. position/size when switching/launching a session
 .br
-\(en \fB2\fP: (not implemented) also when window is moved or resized
+\(en \fB2\fP: sync. also when window is moved or resized
 .br
-\(en \fB3\fP: (not implemented) always
+\(en \fB3\fP: sync. also when window is minimized
+.br
+\(en \fB4\fP: sync. also when window is started
 
 .SH LIMITATIONS
 
@@ -1959,8 +1994,10 @@ only the default PC-style and VT220-style are available.
 There is no Tektronix 4014 emulation.
 Mouse highlighting mode is not implemented.
 
-The majority of xterm's many control sequences is implemented, but quite a few
-are missing.  Significant omissions should be reported to the issue tracker.
+The majority of xterm's many control sequences is implemented, 
+up to the VT300 series level; 
+VT400 rectangular area operations are not implemented.
+Significant omissions should be reported to the issue tracker.
 
 .SH SEE ALSO
 
