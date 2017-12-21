@@ -16,7 +16,9 @@
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
-#include <sys/cygwin.h>
+#ifdef __CYGWIN__
+#include <sys/cygwin.h>  // cygwin_internal
+#endif
 
 #if CYGWIN_VERSION_API_MINOR >= 93
 #include <pty.h>
@@ -35,7 +37,7 @@ int forkpty(int *, char *, struct termios *, struct winsize *);
 
 bool clone_size_token = true;
 
-string child_dir = null;
+static string child_dir = null;
 
 static pid_t pid;
 static bool killed;
@@ -112,7 +114,15 @@ open_logfile(bool toggling)
       logging = true;
     }
     else {
-      char * log = path_win_w_to_posix(cfg.log);
+      char * log;
+      if (*cfg.log == '~' && cfg.log[1] == '/') {
+        // substitute '~' -> home
+        char * path = cs__wcstombs(&cfg.log[2]);
+        log = asform("%s/%s", home, path);
+        free(path);
+      }
+      else
+        log = path_win_w_to_posix(cfg.log);
 #ifdef debug_logfilename
       printf("<%ls> -> <%s>\n", cfg.log, log);
 #endif
@@ -305,6 +315,14 @@ child_create(char *argv[], struct winsize *winp)
     exit(255);
   }
   else { // Parent process.
+#ifdef __midipix__
+    // This corrupts CR in cygwin
+    struct termios attr;
+    tcgetattr(pty_fd, &attr);
+    cfmakeraw(&attr);
+    tcsetattr(pty_fd, TCSANOW, &attr);
+#endif
+
     fcntl(pty_fd, F_SETFL, O_NONBLOCK);
 
     //child_update_charset();  // could do it here or as above
@@ -519,6 +537,22 @@ child_write(const char *buf, uint len)
     write(pty_fd, buf, len);
 }
 
+/*
+  Simulate a BREAK event.
+ */
+void
+child_break()
+{
+  int gid = tcgetpgrp(pty_fd);
+  if (gid > 1) {
+    struct termios attr;
+    tcgetattr(pty_fd, &attr);
+    if ((attr.c_iflag & (IGNBRK | BRKINT)) == BRKINT) {
+      kill(gid, SIGINT);
+    }
+  }
+}
+
 void
 child_printf(const char *fmt, ...)
 {
@@ -632,6 +666,15 @@ user_command(int n)
         *sepp = '\0';
 
       if (n == 0) {
+        int fgpid = foreground_pid();
+        if (fgpid) {
+          char * _fgpid = 0;
+          asprintf(&_fgpid, "%d", fgpid);
+          if (_fgpid) {
+            setenv("MINTTY_PID", _fgpid, true);
+            free(_fgpid);
+          }
+        }
         char * fgp = foreground_prog();
         if (fgp) {
           setenv("MINTTY_PROG", fgp, true);
@@ -794,8 +837,25 @@ child_fork(int argc, char *argv[], int moni)
     close(win_fd);
 
     if (child_dir && *child_dir) {
-      chdir(child_dir);
-      setenv("PWD", child_dir, true);
+      string set_dir = child_dir;
+      if (support_wsl) {
+        wchar * wcd = cs__utftowcs(child_dir);
+#ifdef debug_wsl
+        printf("fork wsl <%ls>\n", wcd);
+#endif
+        wcd = dewsl(wcd);
+#ifdef debug_wsl
+        printf("fork wsl <%ls>\n", wcd);
+#endif
+        set_dir = (string)cs__wcstombs(wcd);
+        delete(wcd);
+      }
+
+      chdir(set_dir);
+      setenv("PWD", set_dir, true);
+
+      if (support_wsl)
+        delete(set_dir);
     }
 
 #ifdef add_child_parameters

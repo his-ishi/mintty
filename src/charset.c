@@ -335,10 +335,10 @@ update_locale(void)
       string l = default_locale;
       default_locale = asform("%s@cjkwide", l);
       delete(l);
-# if CYGWIN_VERSION_API_MINOR >= 999999
+//# if CYGWIN_VERSION_API_MINOR >= 999999
       // indicate @cjkwide to locale lib
       setlocale(LC_CTYPE, default_locale);
-# endif
+//# endif
       // in case it's not accepted, yet indicate @cjkwide to shell
       setenv("LC_CTYPE", default_locale, true);
     }
@@ -714,6 +714,17 @@ wcsncpy(wchar * s1, const wchar * s2, int len)
   return s1;
 }
 
+wchar *
+wcsncat(wchar * s1, const wchar * s2, int len)
+{
+  while (*s1)
+    s1++;
+  while (*s2 && len--)
+    *s1++ = *s2++;
+  *s1 = 0;
+  return s1;
+}
+
 #endif
 
 #if CYGWIN_VERSION_API_MINOR < 207 || defined(__midipix__) || defined(debug_wcs)
@@ -734,7 +745,7 @@ wcsdup(const wchar * s)
 */
 
 #ifdef __CYGWIN__
-#include <sys/cygwin.h>
+#include <sys/cygwin.h>  // cygwin_conv_path
 # if CYGWIN_VERSION_API_MINOR >= 181
 
 char *

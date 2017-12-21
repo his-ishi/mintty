@@ -17,7 +17,7 @@ typedef enum {
   CYAN_I    = 6,
   WHITE_I   = 7,
 
-  // Bold ANSI colours
+  // Bright/Bold ANSI colours
   BOLD_BLACK_I   = 8,
   BOLD_RED_I     = 9,
   BOLD_GREEN_I   = 10,
@@ -34,25 +34,35 @@ typedef enum {
   // gray shades running between black and white but not including either
   // on grounds of redundancy.
 
+  // Colour numbers 256 through 271 are copies of ANSI colours 0 through 15
+  // supporting distinct handling of ANSI colours SGR 30..37/40../90../100.. 
+  // and palette colours SGR 38/48;5;0..15
+  // For distinct bold handling alone, they could also be mapped to 0..15
+  // but duplicating them would also facilitate distinct colour values if desired
+  ANSI0            = 256,
+
   // Default foreground
-  FG_COLOUR_I      = 256,
-  BOLD_FG_COLOUR_I = 257,
+  FG_COLOUR_I      = 272,
+  BOLD_FG_COLOUR_I = 273,
 
   // Default background
-  BG_COLOUR_I      = 258,
-  BOLD_BG_COLOUR_I = 259,
+  BG_COLOUR_I      = 274,
+  BOLD_BG_COLOUR_I = 275,
 
   // Cursor colours
-  CURSOR_TEXT_COLOUR_I = 260,
-  CURSOR_COLOUR_I      = 261,
-  IME_CURSOR_COLOUR_I  = 262,
+  CURSOR_TEXT_COLOUR_I = 276,
+  CURSOR_COLOUR_I      = 277,
+  IME_CURSOR_COLOUR_I  = 278,
 
   // Selection highlight colours
-  SEL_COLOUR_I         = 263,
-  SEL_TEXT_COLOUR_I    = 264,
+  SEL_COLOUR_I         = 279,
+  SEL_TEXT_COLOUR_I    = 280,
+
+  // configured Bold colour
+  BOLD_COLOUR_I = 281,
 
   // Number of colours
-  COLOUR_NUM = 265,
+  COLOUR_NUM = 282,
 
   // True Colour indicator
   // assert (TRUE_COLOUR % 4) == 0 so that checking x >= TRUE_COLOUR
@@ -60,6 +70,10 @@ typedef enum {
   TRUE_COLOUR = 0x180
 } colour_i;
 
+// colour classes
+#define CCL_ANSI8(i) ((i) >= ANSI0 && (i) < ANSI0 + 8)
+#define CCL_DEFAULT(i) ((i) >= FG_COLOUR_I && (i) <= BOLD_BG_COLOUR_I)
+#define CCL_TRUEC(i) ((i) >= TRUE_COLOUR)
 
 /* Special Characters:
  * UCSWIDE is a special value used in the terminal data to signify
@@ -131,16 +145,25 @@ enum {
   DATTR_STARTRUN  = 0x8000000000000000u, /* start of redraw run */
   DATTR_MASK      = TATTR_RIGHTCURS | TATTR_PASCURS | TATTR_ACTCURS
                     | DATTR_STARTRUN
+  // unassigned bits:
+  //                0x0000000800000000u
+  //                0x0010000000000000u
+  //                0x0020000000000000u
+  //                0x0040000000000000u
+  //                0x0080000000000000u
+  //                0x1000000000000000u
+  //                0x2000000000000000u
+  //                0x4000000000000000u
 };
 
 /* Line attributes.
  */
 enum {
-  LATTR_NORM      = 0x0000u,
-  LATTR_WIDE      = 0x0001u,
-  LATTR_TOP       = 0x0002u,
-  LATTR_BOT       = 0x0003u,
-  LATTR_MODE      = 0x0003u,
+  LATTR_NORM      = 0x0000u, /* DEC single-width line (DECSWL) */
+  LATTR_WIDE      = 0x0001u, /* DEC double-width line (DECDWL) */
+  LATTR_TOP       = 0x0002u, /* DEC double-height line (DECDHL), top half */
+  LATTR_BOT       = 0x0003u, /* DEC double-height line (DECDHL), bottom half */
+  LATTR_MODE      = 0x0003u, /* mask for double-width/height attributes */
   LATTR_WRAPPED   = 0x0010u, /* this line wraps to next */
   LATTR_WRAPPED2  = 0x0020u, /* with WRAPPED: CJK wide character
                                   * wrapped to next line, so last
@@ -148,7 +171,10 @@ enum {
   LATTR_CLEARPAD  = 0x0040u, /* flag to clear padding from overhang */
   LATTR_MARKED    = 0x0100u, /* scroll marker */
   LATTR_UNMARKED  = 0x0200u, /* secondary scroll marker */
-  LATTR_NOBIDI    = 0x1000u, /* disable bidi on this line */
+  LATTR_NOBIDI    = 0x4000u, /* disable bidi on this line */
+  // overlay line display (italic right-to-left overhang handling):
+  LATTR_DISP1     = 0x1000u,
+  LATTR_DISP2     = 0x2000u,
 };
 
 enum {
@@ -157,8 +183,10 @@ enum {
   ATTR_DEFAULT = ATTR_DEFFG | ATTR_DEFBG,
 };
 
+typedef unsigned long long cattrflags;
+
 typedef struct {
-  unsigned long long attr;
+  cattrflags attr;
   uint truefg;
   uint truebg;
 } cattr;
@@ -411,6 +439,7 @@ struct term {
   bool wide_indic;
   bool wide_extra;
   bool disable_bidi;
+  bool enable_bold_colour;
 
   bool sixel_display;        // true if sixel scrolling mode is off
   bool sixel_scrolls_right;  // on: sixel scrolling leaves cursor to right of graphic

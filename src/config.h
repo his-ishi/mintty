@@ -163,8 +163,11 @@ typedef struct {
   colour ime_cursor_colour;
   colour ansi_colours[16];
   wstring sixel_clip_char;
+  bool short_long_opts;
+  bool bold_as_special;
   // Legacy
   bool use_system_colours;
+  bool old_bold;
 } config;
 
 extern string config_dir;
@@ -182,5 +185,6 @@ extern void remember_arg(string);
 extern void finish_config(void);
 extern void copy_config(char * tag, config * dst, const config * src);
 extern void apply_config(bool save);
+extern wchar * getregstr(HKEY key, wstring subkey, wstring attribute);
 
 #endif

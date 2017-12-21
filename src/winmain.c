@@ -23,12 +23,17 @@ char * mintty_debug;
 
 #include <locale.h>
 #include <getopt.h>
+#if CYGWIN_VERSION_API_MINOR < 74
+#define getopt_long_only getopt_long
+#endif
 #include <pwd.h>
 
 #include <mmsystem.h>  // PlaySound for MSys
 #include <shellapi.h>
 
-#include <sys/cygwin.h>
+#ifdef __CYGWIN__
+#include <sys/cygwin.h>  // cygwin_internal
+#endif
 
 #if CYGWIN_VERSION_DLL_MAJOR >= 1007
 #include <propsys.h>
@@ -70,6 +75,16 @@ static bool resizing;
 static bool disable_poschange = true;
 static int zoom_token = 0;  // for heuristic handling of Shift zoom (#467, #476)
 static bool default_size_token = false;
+
+// Inter-window actions
+enum {
+  WIN_MINIMIZE = 0,
+  WIN_MAXIMIZE = -1,
+  WIN_TOP = 1,
+  WIN_TITLE = 7,
+};
+
+static void update_tab_titles(void);
 
 // Options
 static bool title_settable = true;
@@ -285,8 +300,10 @@ win_set_title(char *title)
 {
   if (title_settable) {
     wchar wtitle[strlen(title) + 1];
-    if (cs_mbstowcs(wtitle, title, lengthof(wtitle)) >= 0)
+    if (cs_mbstowcs(wtitle, title, lengthof(wtitle)) >= 0) {
       SetWindowTextW(wnd, wtitle);
+      update_tab_titles();
+    }
   }
 }
 
@@ -334,6 +351,8 @@ win_prefix_title(const wstring prefix)
   wchar * title = & ptitle[plen];
   len = GetWindowTextW(wnd, title, len + 1);
   SetWindowTextW(wnd, ptitle);
+  // "[Printing...] " or "TERMINATED"
+  update_tab_titles();
 }
 
 void
@@ -346,6 +365,8 @@ win_unprefix_title(const wstring prefix)
   if (!wcsncmp(ptitle, prefix, plen)) {
     wchar * title = & ptitle[plen];
     SetWindowTextW(wnd, title);
+    // "[Printing...] "
+    update_tab_titles();
   }
 }
 
@@ -375,6 +396,7 @@ win_restore_title(void)
   wstring title = titles[--titles_i];
   if (title) {
     SetWindowTextW(wnd, title);
+    update_tab_titles();
     delete(title);
     titles[titles_i] = 0;
   }
@@ -383,6 +405,22 @@ win_restore_title(void)
 /*
  *  Switch to next or previous application window in z-order
  */
+
+static void
+win_to_top(HWND top_wnd)
+{
+  // this would block if target window is blocked:
+  // BringWindowToTop(top_wnd);
+
+  // this does not work properly (see comments at when WM_USER:)
+  // PostMessage(top_wnd, WM_USER, 0, WIN_TOP);
+
+  // one of these works:
+  SetForegroundWindow(top_wnd);
+  // SetActiveWindow(top_wnd);
+
+  ShowWindow(top_wnd, SW_RESTORE);
+}
 
 static HWND first_wnd, last_wnd;
 
@@ -419,12 +457,24 @@ win_switch(bool back, bool alternate)
       SetWindowPos(wnd, last_wnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE
                        | (alternate ? SWP_NOZORDER : SWP_NOREPOSITION));
     }
-    BringWindowToTop(first_wnd);
+    win_to_top(first_wnd);
   }
 }
 
+
+/*
+ *  Virtual Tabs
+ */
+
+#define dont_debug_tabs
+#define dont_debug_tabbar
+
 static uint tabn = 0;
 static HWND * tabs = 0;
+
+#ifndef GWL_USERDATA
+#define GWL_USERDATA -21
+#endif
 
 void
 clear_tabs()
@@ -454,7 +504,63 @@ get_tab(uint tabi)
     return 0;
 }
 
-#define dont_debug_tabs
+static void
+refresh_tab_titles()
+{
+  BOOL CALLBACK wnd_enum_tabs(HWND curr_wnd, LPARAM lp)
+  {
+    (void)lp;
+    WINDOWINFO curr_wnd_info;
+    curr_wnd_info.cbSize = sizeof(WINDOWINFO);
+    GetWindowInfo(curr_wnd, &curr_wnd_info);
+    if (class_atom == curr_wnd_info.atomWindowType) {
+      int len = GetWindowTextLengthW(curr_wnd);
+      if (!len) {
+        // check whether already terminating
+        LONG fini = GetWindowLong(curr_wnd, GWL_USERDATA);
+        if (fini) {
+#ifdef debug_tabbar
+          printf("[%8p] get tab %8p: fini\n", wnd, curr_wnd);
+#endif
+          return true;
+        }
+      }
+      wchar title[len + 1];
+      GetWindowTextW(curr_wnd, title, len + 1);
+#ifdef debug_tabbar
+      printf("[%8p] get tab %8p: <%ls>\n", wnd, curr_wnd, title);
+#endif
+    }
+    return true;
+  }
+  if (cfg.geom_sync)
+    EnumWindows(wnd_enum_tabs, 0);
+}
+
+static void
+update_tab_titles()
+{
+  BOOL CALLBACK wnd_enum_tabs(HWND curr_wnd, LPARAM lp)
+  {
+    (void)lp;
+    WINDOWINFO curr_wnd_info;
+    curr_wnd_info.cbSize = sizeof(WINDOWINFO);
+    GetWindowInfo(curr_wnd, &curr_wnd_info);
+    if (class_atom == curr_wnd_info.atomWindowType) {
+      if (curr_wnd != wnd) {
+        PostMessage(curr_wnd, WM_USER, 0, WIN_TITLE);
+#ifdef debug_tabbar
+        printf("notified %8p to update tabbar\n", curr_wnd);
+#endif
+      }
+    }
+    return true;
+  }
+  if (cfg.geom_sync) {
+    refresh_tab_titles();
+    EnumWindows(wnd_enum_tabs, 0);
+  }
+}
 
 static void
 win_gotab(uint n)
@@ -462,33 +568,24 @@ win_gotab(uint n)
   HWND tab = get_tab(n);
 
   // apparently, we don't have to fiddle with SetWindowPos as in win_switch
-  BringWindowToTop(tab);
-  ShowWindow(tab, SW_RESTORE);
+
+  win_to_top(tab);
 
   // reposition / resize
-#ifdef geom_sync_from_launching
   if (cfg.geom_sync) {
-    // Actually, we should not do this here, but only in the target tab
-    // (after notifying it with the size), in order to respect a
-    // possibly different SessionGeomSync config there.
-    RECT r;
-    GetWindowRect(wnd, &r);
-    SetWindowPos(tab, null, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                 SWP_NOZORDER);
-  }
-#else
-  RECT r;
-  GetWindowRect(wnd, &r);
+    if (win_is_fullscreen)
+      PostMessage(tab, WM_USER, 0, WIN_MAXIMIZE);
+    else {
+      RECT r;
+      GetWindowRect(wnd, &r);
 #ifdef debug_tabs
-  printf("switcher %d,%d %d,%d\n", (int)r.left, (int)r.top, (int)(r.right - r.left), (int)(r.bottom - r.top));
+      printf("switcher %d,%d %d,%d\n", (int)r.left, (int)r.top, (int)(r.right - r.left), (int)(r.bottom - r.top));
 #endif
-  if (win_is_fullscreen)
-    SendMessageW(tab, WM_USER, 0, -1);
-  else
-    SendMessageW(tab, WM_USER,
-                 MAKEWPARAM(r.right - r.left, r.bottom - r.top),
-                 MAKELPARAM(r.left, r.top));
-#endif
+      PostMessage(tab, WM_USER,
+                  MAKEWPARAM(r.right - r.left, r.bottom - r.top),
+                  MAKELPARAM(r.left, r.top));
+    }
+  }
 
   if (tab == wnd)
     // avoid hiding when switching to myself
@@ -519,18 +616,18 @@ win_synctabs(int level)
     if (class_atom == curr_wnd_info.atomWindowType) {
       if (curr_wnd != wnd) {
         if (win_is_fullscreen)
-          SendMessageW(curr_wnd, WM_USER, 0, -1);
+          PostMessage(curr_wnd, WM_USER, 0, WIN_MAXIMIZE);
         else if (level == 3) // minimize
-          SendMessageW(curr_wnd, WM_USER, 0, 0);
+          PostMessage(curr_wnd, WM_USER, 0, WIN_MINIMIZE);
         else {
           RECT r;
           GetWindowRect(wnd, &r);
 #ifdef debug_tabs
           printf("sync all %d,%d %d,%d\n", (int)r.left, (int)r.top, (int)(r.right - r.left), (int)(r.bottom - r.top));
 #endif
-          SendMessageW(curr_wnd, WM_USER,
-                       MAKEWPARAM(r.right - r.left, r.bottom - r.top),
-                       MAKELPARAM(r.left, r.top));
+          PostMessage(curr_wnd, WM_USER,
+                      MAKEWPARAM(r.right - r.left, r.bottom - r.top),
+                      MAKELPARAM(r.left, r.top));
         }
       }
     }
@@ -539,6 +636,11 @@ win_synctabs(int level)
   if (cfg.geom_sync >= level)
     EnumWindows(wnd_enum_tabs, 0);
 }
+
+
+/*
+ *  Monitor-related window functions
+ */
 
 static void
 win_launch(int n)
@@ -1636,26 +1738,43 @@ static struct {
 #endif
 
     when WM_USER:  // reposition and resize
-      if (cfg.geom_sync) {
+      if (!wp && lp == WIN_TOP) { // Ctrl+Alt or session switcher
+        // these do not work:
+        // BringWindowToTop(wnd);
+        // SetForegroundWindow(wnd);
+        // SetActiveWindow(wnd);
+
+        // this would work, kind of, 
+        // but blocks previous window from raising on next click:
+        SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        SetWindowPos(wnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+        ShowWindow(wnd, SW_RESTORE);
+      }
+      else if (!wp && lp == WIN_TITLE) {
+        if (cfg.geom_sync)
+          refresh_tab_titles();
+      }
+      else if (cfg.geom_sync) {
 #ifdef debug_tabs
         printf("switched %d,%d %d,%d\n", (INT16)LOWORD(lp), (INT16)HIWORD(lp), LOWORD(wp), HIWORD(wp));
 #endif
-        if (win_is_fullscreen)
-          clear_fullscreen();
-
         if (!wp) {
-          if (!lp && cfg.geom_sync >= 3)
+          if (lp == WIN_MINIMIZE && cfg.geom_sync >= 3)
             ShowWindow(wnd, SW_MINIMIZE);
-          else if (lp == -1)
+          else if (lp == WIN_MAXIMIZE && cfg.geom_sync)
             win_maximise(2);
         }
-        else
+        else if (cfg.geom_sync) {
+          if (win_is_fullscreen)
+            clear_fullscreen();
           // (INT16) to handle multi-monitor negative coordinates properly
           SetWindowPos(wnd, null,
                        //GET_X_LPARAM(lp), GET_Y_LPARAM(lp),
                        (INT16)LOWORD(lp), (INT16)HIWORD(lp),
                        LOWORD(wp), HIWORD(wp),
                        SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+        }
       }
 
     when WM_COMMAND or WM_SYSCOMMAND: {
@@ -1684,6 +1803,7 @@ static struct {
         user_command(wp - IDM_USERCOMMAND);
       else
       switch (wp & ~0xF) {  /* low 4 bits reserved to Windows */
+        when IDM_BREAK: child_break();
         when IDM_OPEN: term_open();
         when IDM_COPY: term_copy();
         when IDM_COPASTE: term_copy(); win_paste();
@@ -1727,7 +1847,7 @@ static struct {
           int moni = search_monitors(&x, &y, mon, true, 0);
           child_fork(main_argc, main_argv, moni);
         }
-        when IDM_NEW_MONI: child_fork(main_argc, main_argv, (int)lp - ' ');
+        when IDM_NEW_MONI: child_fork(main_argc, main_argv, (int)lp);
         when IDM_COPYTITLE: win_copy_title();
       }
     }
@@ -1854,6 +1974,11 @@ static struct {
 #endif
 
       return 0;
+
+    when WM_MOUSEACTIVATE:
+      // prevent accidental selection on activation (#717)
+      if (LOWORD(lp) == HTCLIENT && HIWORD(lp) == WM_LBUTTONDOWN)
+        return MA_ACTIVATEANDEAT;
 
     when WM_ACTIVATE:
       if ((wp & 0xF) != WA_INACTIVE) {
@@ -2151,7 +2276,7 @@ print_error(string msg)
 }
 
 static void
-option_error(char * msg, char * option)
+option_error(char * msg, char * option, int err)
 {
   finish_config();  // ensure localized message
   // msg is in UTF-8, option is in current encoding
@@ -2159,6 +2284,9 @@ option_error(char * msg, char * option)
   //char * fullmsg = asform("%s\n%s", optmsg, _("Try '--help' for more information"));
   char * fullmsg = strdup(optmsg);
   strappend(fullmsg, "\n");
+  if (err) {
+    strappend(fullmsg, asform("[Error info %d]\n", err));
+  }
   strappend(fullmsg, _("Try '--help' for more information"));
   show_message(fullmsg, MB_ICONWARNING);
   exit(1);
@@ -2224,6 +2352,18 @@ void
 exit_mintty(void)
 {
   report_pos();
+
+  // could there be a lag until the window is actually destroyed?
+  // so we'd have to add a safeguard here...
+  SetWindowTextA(wnd, "");
+  // indicate "terminating"
+  SetWindowLong(wnd, GWL_USERDATA, -1);
+  // flush properties cache
+  SetWindowPos(wnd, null, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+               | SWP_NOREPOSITION | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+  update_tab_titles();
+
   exit(0);
 }
 
@@ -2489,32 +2629,16 @@ regclose(HKEY key)
     RegCloseKey(key);
 }
 
-static wchar *
-getreg(HKEY key, wstring subkey, wstring attribute)
-{
-  DWORD blen;
-  int res = RegGetValueW(key, subkey, attribute, RRF_RT_ANY, 0, 0, &blen);
-  if (res)
-    return 0;
-  wchar * val = malloc(blen);
-  res = RegGetValueW(key, subkey, attribute, RRF_RT_ANY, 0, val, &blen);
-  if (res) {
-    free(val);
-    return 0;
-  }
-  return val;
-}
-
 #define dont_debug_reg_lxss
 
-static bool
+static int
 getlxssinfo(wstring wslname,
             char ** wsl_guid, wstring * wsl_rootfs, wstring * wsl_icon)
 {
   static wstring lxsskeyname = W("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Lxss");
   HKEY lxss = regopen(HKEY_CURRENT_USER, lxsskeyname);
   if (!lxss)
-    return false;
+    return 1;
 
   wchar * legacy_icon()
   {
@@ -2529,23 +2653,23 @@ getlxssinfo(wstring wslname,
     return 0;
   }
 
-  bool getlxssdistinfo(HKEY lxss, wchar * guid)
+  int getlxssdistinfo(HKEY lxss, wchar * guid)
   {
     wchar * rootfs;
     wchar * icon = 0;
 
-    wchar * bp = getreg(lxss, guid, W("BasePath"));
+    wchar * bp = getregstr(lxss, guid, W("BasePath"));
     if (!bp)
-      return false;
+      return 3;
 
-    wchar * pn = getreg(lxss, guid, W("PackageFamilyName"));
+    wchar * pn = getregstr(lxss, guid, W("PackageFamilyName"));
     if (pn) {  // look for installation directory and icon file
       rootfs = newn(wchar, wcslen(bp) + 8);
       wcscpy(rootfs, bp);
       wcscat(rootfs, W("\\rootfs"));
       HKEY appdata = regopen(HKEY_CURRENT_USER, W("Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData"));
       HKEY package = regopen(appdata, pn);
-      wchar * pfn = getreg(package, W("Schemas"), W("PackageFullName"));
+      wchar * pfn = getregstr(package, W("Schemas"), W("PackageFullName"));
       regclose(package);
       regclose(appdata);
       // "%ProgramW6432%/WindowsApps/<PackageFullName>/images/icon.ico"
@@ -2563,7 +2687,7 @@ getlxssinfo(wstring wslname,
       icon = legacy_icon();
     }
 #ifdef debug_reg_lxss
-    printf("WSL distribution name %ls\n", getreg(lxss, guid, W("DistributionName")));
+    printf("WSL distribution name %ls\n", getregstr(lxss, guid, W("DistributionName")));
     printf("-- guid %ls\n", guid);
     printf("-- root %ls\n", rootfs);
     printf("-- pack %ls\n", pn);
@@ -2572,14 +2696,14 @@ getlxssinfo(wstring wslname,
     *wsl_guid = cs__wcstoutf(guid);
     *wsl_rootfs = rootfs;
     *wsl_icon = icon;
-    return true;
+    return 0;
   }
 
   if (!wslname || !*wslname) {
-    wchar * dd = getreg(HKEY_CURRENT_USER, lxsskeyname, W("DefaultDistribution"));
-    int ok;
+    wchar * dd = getregstr(HKEY_CURRENT_USER, lxsskeyname, W("DefaultDistribution"));
+    int err;
     if (dd) {
-      ok = getlxssdistinfo(lxss, dd);
+      err = getlxssdistinfo(lxss, dd);
       free(dd);
     }
     else {  // Legacy "Bash on Windows" installed only, no registry info
@@ -2593,19 +2717,19 @@ getlxssinfo(wstring wslname,
         *wsl_rootfs = rootfs;
         *wsl_guid = "";
         *wsl_icon = legacy_icon();
-        ok = true;
+        err = 0;
       }
       else
-        ok = false;
+        err = 7;
 #else
       *wsl_guid = "";
       *wsl_rootfs = W("");  // activate legacy tricks in winclip.c
       *wsl_icon = legacy_icon();
-      ok = true;
+      err = 0;
 #endif
     }
     regclose(lxss);
-    return ok;
+    return err;
   }
   else {
     DWORD nsubkeys = 0;
@@ -2625,16 +2749,16 @@ getlxssinfo(wstring wslname,
       wchar subkey[keylen];
       ret = RegEnumKeyW(lxss, i, subkey, keylen);
       if (ret == ERROR_SUCCESS) {
-          wchar * dn = getreg(lxss, subkey, W("DistributionName"));
+          wchar * dn = getregstr(lxss, subkey, W("DistributionName"));
           if (0 == wcscmp(dn, wslname)) {
-            int ok = getlxssdistinfo(lxss, subkey);
+            int err = getlxssdistinfo(lxss, subkey);
             regclose(lxss);
-            return ok;
+            return err;
           }
       }
     }
     regclose(lxss);
-    return false;
+    return 9;
   }
 }
 
@@ -2657,18 +2781,18 @@ waccess(wstring fn, int amode)
   return ok;
 }
 
-static bool
+static int
 select_WSL(char * wsl)
 {
   wchar * wslname = cs__mbstowcs(wsl ?: "");
   wstring wsl_icon;
   // set --rootfs implicitly
-  bool ok = getlxssinfo(wslname, &wsl_guid, &wsl_basepath, &wsl_icon);
+  int err = getlxssinfo(wslname, &wsl_guid, &wsl_basepath, &wsl_icon);
   free(wslname);
-  if (ok) {
+  if (!err) {
     // set --icon if WSL specific icon exists
     if (wsl_icon) {
-      if (waccess(wsl_icon, R_OK))
+      if (!icon_is_from_shortcut && waccess(wsl_icon, R_OK))
         cfg.icon = wsl_icon;
       else
         delete(wsl_icon);
@@ -2678,7 +2802,7 @@ select_WSL(char * wsl)
     set_arg_option("Locale", strdup("C"));
     set_arg_option("Charset", strdup("UTF-8"));
   }
-  return ok;
+  return err;
 }
 
 #endif
@@ -2718,6 +2842,20 @@ static char help[] =
 
 static const char short_opts[] = "+:c:C:eh:i:l:o:p:s:t:T:B:R:uw:HVdD~";
 
+enum {
+  OPT_FG       = 0x80,
+  OPT_BG       = 0x81,
+  OPT_CR       = 0x82,
+  OPT_SELFG    = 0x83,
+  OPT_SELBG    = 0x84,
+  OPT_FONT     = 0x85,
+  OPT_FS       = 0x86,
+  OPT_GEOMETRY = 0x87,
+  OPT_EN       = 0x88,
+  OPT_LF       = 0x89,
+  OPT_SL       = 0x8A,
+};
+
 static const struct option
 opts[] = {
   {"config",     required_argument, 0, 'c'},
@@ -2754,6 +2892,19 @@ opts[] = {
   {"daemon",     no_argument,       0, 'D'},
   {"nopin",      no_argument,       0, ''},  // short option not enabled
   {"store-taskbar-properties", no_argument, 0, ''},  // no short option
+  // further xterm-style convenience options, all without short option:
+  {"fg",         required_argument, 0, OPT_FG},
+  {"bg",         required_argument, 0, OPT_BG},
+  {"cr",         required_argument, 0, OPT_CR},
+  {"selfg",      required_argument, 0, OPT_SELFG},
+  {"selbg",      required_argument, 0, OPT_SELBG},
+  {"fn",         required_argument, 0, OPT_FONT},
+  {"font",       required_argument, 0, OPT_FONT},
+  {"fs",         required_argument, 0, OPT_FS},
+  {"geometry",   required_argument, 0, OPT_GEOMETRY},
+  {"en",         required_argument, 0, OPT_EN},
+  {"lf",         required_argument, 0, OPT_LF},
+  {"sl",         required_argument, 0, OPT_SL},
   {0, 0, 0, 0}
 };
 
@@ -2843,7 +2994,9 @@ main(int argc, char *argv[])
 #endif
 
   for (;;) {
-    int opt = getopt_long(argc, argv, short_opts, opts, 0);
+    int opt = cfg.short_long_opts
+      ? getopt_long_only(argc, argv, short_opts, opts, 0)
+      : getopt_long(argc, argv, short_opts, opts, 0);
     if (opt == -1 || opt == 'e')
       break;
     char * longopt = argv[optind - 1];
@@ -2851,15 +3004,44 @@ main(int argc, char *argv[])
     switch (opt) {
       when 'c': load_config(optarg, 3);
       when 'C': load_config(optarg, false);
+      when '': support_wsl = true;
+      when '': wsl_basepath = path_posix_to_win_w(optarg);
+#if CYGWIN_VERSION_API_MINOR >= 74
+      when '': {
+        int err = select_WSL(optarg);
+        if (err)
+          option_error(__("WSL distribution '%s' not found"), optarg ?: _("(Default)"), err);
+      }
+#endif
+      when '~':
+        start_home = true;
+        chdir(home);
+      when '':
+        if (chdir(optarg) < 0) {
+          if (*optarg == '"' || *optarg == '\'')
+            if (optarg[strlen(optarg) - 1] == optarg[0]) {
+              // strip off embedding quotes as provided when started 
+              // from Windows context menu by registry entry
+              char * dir = strdup(&optarg[1]);
+              dir[strlen(dir) - 1] = '\0';
+              chdir(dir);
+              free(dir);
+            }
+        }
       when '':
         if (config_dir)
-          option_error(__("Duplicate option '%s'"), "configdir");
+          option_error(__("Duplicate option '%s'"), "configdir", 0);
         else {
           config_dir = strdup(optarg);
           string rc_file = asform("%s/config", config_dir);
           load_config(rc_file, 2);
           delete(rc_file);
         }
+      when '?':
+        option_error(__("Unknown option '%s'"), optopt ? shortopt : longopt, 0);
+      when ':':
+        option_error(__("Option '%s' requires an argument"),
+                     longopt[1] == '-' ? longopt : shortopt, 0);
       when 'h': set_arg_option("Hold", optarg);
       when 'i': set_arg_option("Icon", optarg);
       when 'l': // -l , --log
@@ -2885,7 +3067,7 @@ main(int argc, char *argv[])
         else if (sscanf(optarg, "%i,%i%1s", &cfg.x, &cfg.y, (char[2]){}) == 2)
           ;
         else
-          option_error(__("Syntax error in position argument '%s'"), optarg);
+          option_error(__("Syntax error in position argument '%s'"), optarg, 0);
       when 's':
         if (strcmp(optarg, "maxwidth") == 0)
           maxwidth = true;
@@ -2896,7 +3078,7 @@ main(int argc, char *argv[])
         else if (sscanf(optarg, "%ux%u%1s", &cfg.cols, &cfg.rows, (char[2]){}) == 2)
           ;
         else
-          option_error(__("Syntax error in size argument '%s'"), optarg);
+          option_error(__("Syntax error in size argument '%s'"), optarg, 0);
       when 't': set_arg_option("Title", optarg);
       when 'T':
         set_arg_option("Title", optarg);
@@ -2921,28 +3103,6 @@ main(int argc, char *argv[])
       when 'w': set_arg_option("Window", optarg);
       when '': set_arg_option("Class", optarg);
       when '': cfg.bidi = 0;
-      when '': support_wsl = true;
-      when '': wsl_basepath = path_posix_to_win_w(optarg);
-#if CYGWIN_VERSION_API_MINOR >= 74
-      when '':
-        if (!select_WSL(optarg))
-          option_error(__("WSL distribution '%s' not found"), optarg ?: _("(Default)"));
-#endif
-      when '~':
-        start_home = true;
-        chdir(home);
-      when '':
-        if (chdir(optarg) < 0) {
-          if (*optarg == '"' || *optarg == '\'')
-            if (optarg[strlen(optarg) - 1] == optarg[0]) {
-              // strip off embedding quotes as provided when started 
-              // from Windows context menu by registry entry
-              char * dir = strdup(&optarg[1]);
-              dir[strlen(dir) - 1] = '\0';
-              chdir(dir);
-              free(dir);
-            }
-        }
       when 'd':
         cfg.daemonize = false;
       when 'D':
@@ -2978,11 +3138,72 @@ main(int argc, char *argv[])
         free(vertext);
         return 0;
       }
-      when '?':
-        option_error(__("Unknown option '%s'"), optopt ? shortopt : longopt);
-      when ':':
-        option_error(__("Option '%s' requires an argument"),
-                     longopt[1] == '-' ? longopt : shortopt);
+      when OPT_FG:
+        set_arg_option("ForegroundColour", optarg);
+      when OPT_BG:
+        set_arg_option("BackgroundColour", optarg);
+      when OPT_CR:
+        set_arg_option("CursorColour", optarg);
+      when OPT_FONT:
+        set_arg_option("Font", optarg);
+      when OPT_FS:
+        set_arg_option("FontSize", optarg);
+      when OPT_LF:
+        set_arg_option("Log", optarg);
+      when OPT_SELFG:
+        set_arg_option("HighlightForegroundColour", optarg);
+      when OPT_SELBG:
+        set_arg_option("HighlightBackgroundColour", optarg);
+      when OPT_SL:
+        set_arg_option("ScrollbackLines", optarg);
+      when OPT_EN: {
+#if HAS_LOCALES
+        char * loc = setlocale(LC_CTYPE, 0);
+        if (loc) {
+          loc = strdup(loc);
+          char * dot = strchr(loc, '.');
+          if (dot)
+            *dot = 0;
+          set_arg_option("Locale", loc);
+          free(loc);
+        }
+        else
+          set_arg_option("Locale", "C");
+#else
+        set_arg_option("Locale", "C");
+#endif
+        set_arg_option("Charset", optarg);
+      }
+      when OPT_GEOMETRY: {  // geometry
+        char * oa = optarg;
+        int n;
+
+        if (sscanf(oa, "%ux%u", &n, &n) == 2)
+          if (sscanf(oa, "%ux%u%n", &cfg.cols, &cfg.rows, &n) == 2)
+            oa += n;
+
+        char pmx[2];
+        char pmy[2];
+        char dum[22];
+        if (sscanf(oa, "%1[-+]%21[0-9]%1[-+]%21[0-9]", pmx, dum, pmy, dum) == 4)
+          if (sscanf(oa, "%1[-+]%u%1[-+]%u%n", pmx, &cfg.x, pmy, &cfg.y, &n) == 4) {
+            if (*pmx == '-') {
+              cfg.x = - cfg.x;
+              right = true;
+            }
+            if (*pmy == '-') {
+              cfg.y = - cfg.y;
+              bottom = true;
+            }
+            oa += n;
+          }
+
+        if (sscanf(oa, "@%i%n", &monitor, &n) == 1)
+          oa += n;
+
+        if (*oa)
+          option_error(__("Syntax error in geometry argument '%s'"), optarg, 0);
+      }
     }
   }
   copy_config("main after -o", &file_cfg, &cfg);
@@ -3045,11 +3266,26 @@ main(int argc, char *argv[])
   // Work out what to execute.
   argv += optind;
   if (wsl_guid) {
+#define dont_debug_wsl
     cmd = "/bin/wslbridge";
     argc -= optind;
+    bool login_dash = false;
+    if (*argv && !strcmp(*argv, "-") && !argv[1]) {
+      login_dash = true;
+      argv++;
+      //argc--;
+      //argc++; // for "-l"
+    }
     char ** new_argv = newn(char *, argc + 2 + 4 + start_home);
     char ** pargv = new_argv;
-    *pargv++ = "-wslbridge";
+    if (login_dash) {
+      *pargv++ = "-wslbridge";
+#ifdef wslbridge_supports_l
+      *pargv++ = "-l";
+#endif
+    }
+    else
+      *pargv++ = cmd;
     if (*wsl_guid) {
       *pargv++ = "--distro-guid";
       *pargv++ = wsl_guid;
@@ -3061,6 +3297,13 @@ main(int argc, char *argv[])
       *pargv++ = *argv++;
     *pargv = 0;
     argv = new_argv;
+#ifdef debug_wsl
+    while (*new_argv)
+      printf("<%s>\n", *new_argv++);
+#endif
+    // prevent HOME from being propagated back to Windows applications 
+    // if called from WSL (mintty/wsltty#76)
+    unsetenv("HOME");
   }
   else if (*argv && (argv[1] || strcmp(*argv, "-")))
     cmd = *argv;
@@ -3116,8 +3359,10 @@ main(int argc, char *argv[])
     if (valid_locale) {
       valid_locale = strdup(valid_locale);
       setlocale(LC_CTYPE, "C.UTF-8");
-# if CYGWIN_VERSION_API_MINOR >= 222
+# ifdef __CYGWIN__
+#  if CYGWIN_VERSION_API_MINOR >= 222
       cygwin_internal(CW_INT_SETLOCALE);  // fix internal locale
+#  endif
 # endif
     }
 #endif
@@ -3125,8 +3370,10 @@ main(int argc, char *argv[])
 #if HAS_LOCALES
     if (valid_locale) {
       setlocale(LC_CTYPE, valid_locale);
-# if CYGWIN_VERSION_API_MINOR >= 222
+# ifdef __CYGWIN__
+#  if CYGWIN_VERSION_API_MINOR >= 222
       cygwin_internal(CW_INT_SETLOCALE);  // fix internal locale
+#  endif
 # endif
       free(valid_locale);
     }
@@ -3483,10 +3730,12 @@ main(int argc, char *argv[])
 
   // Finally show the window!
   go_fullscr_on_max = (cfg.window == -1);
+  default_size_token = true;  // prevent font zooming (#708)
   ShowWindow(wnd, go_fullscr_on_max ? SW_SHOWMAXIMIZED : cfg.window);
   SetFocus(wnd);
 
   win_synctabs(4);
+  update_tab_titles();
 
   // Message loop.
   for (;;) {

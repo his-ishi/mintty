@@ -3,7 +3,6 @@
 // Adapted from code from PuTTY-0.60 by Simon Tatham and team.
 // Licensed under the terms of the GNU General Public License v3 or later.
 
-#include "winpriv.h"
 #include "termpriv.h"
 #include "winpriv.h"  // win_get_font, win_change_font
 
@@ -16,7 +15,7 @@
 #include "winimg.h"
 #include "base64.h"
 
-#include <sys/termios.h>
+#include <termios.h>
 
 #define TERM_CMD_BUF_INC_STEP 128
 #define TERM_CMD_BUF_MAX_SIZE (1024 * 1024)
@@ -631,7 +630,7 @@ do_sgr(void)
           uchar arg_10 = term.csi_argv[i] - 10;
           if (arg_10 && *cfg.fontfams[arg_10].name) {
             attr.attr &= ~FONTFAM_MASK;
-            attr.attr |= (unsigned long long)arg_10 << ATTR_FONTFAM_SHIFT;
+            attr.attr |= (cattrflags)arg_10 << ATTR_FONTFAM_SHIFT;
           }
           else {
             if (!arg_10)
@@ -642,7 +641,7 @@ do_sgr(void)
         }
       when 12 ... 20:
         attr.attr &= ~FONTFAM_MASK;
-        attr.attr |= (unsigned long long)(term.csi_argv[i] - 10) << ATTR_FONTFAM_SHIFT;
+        attr.attr |= (cattrflags)(term.csi_argv[i] - 10) << ATTR_FONTFAM_SHIFT;
       //when 21: attr.attr &= ~ATTR_BOLD;
       when 21: attr.attr |= ATTR_DOUBLYUND;
       when 22: attr.attr &= ~(ATTR_BOLD | ATTR_DIM);
@@ -657,12 +656,12 @@ do_sgr(void)
       when 29: attr.attr &= ~ATTR_STRIKEOUT;
       when 30 ... 37: /* foreground */
         attr.attr &= ~ATTR_FGMASK;
-        attr.attr |= (term.csi_argv[i] - 30) << ATTR_FGSHIFT;
+        attr.attr |= (term.csi_argv[i] - 30 + ANSI0) << ATTR_FGSHIFT;
       when 53: attr.attr |= ATTR_OVERL;
       when 55: attr.attr &= ~ATTR_OVERL;
       when 90 ... 97: /* bright foreground */
         attr.attr &= ~ATTR_FGMASK;
-        attr.attr |= ((term.csi_argv[i] - 90 + 8) << ATTR_FGSHIFT);
+        attr.attr |= ((term.csi_argv[i] - 90 + 8 + ANSI0) << ATTR_FGSHIFT);
       when 38: /* 256-colour foreground */
         if (i + 2 < argc && term.csi_argv[i + 1] == 5) {
           // set foreground to palette colour
@@ -685,10 +684,10 @@ do_sgr(void)
         attr.attr |= ATTR_DEFFG;
       when 40 ... 47: /* background */
         attr.attr &= ~ATTR_BGMASK;
-        attr.attr |= (term.csi_argv[i] - 40) << ATTR_BGSHIFT;
+        attr.attr |= (term.csi_argv[i] - 40 + ANSI0) << ATTR_BGSHIFT;
       when 100 ... 107: /* bright background */
         attr.attr &= ~ATTR_BGMASK;
-        attr.attr |= ((term.csi_argv[i] - 100 + 8) << ATTR_BGSHIFT);
+        attr.attr |= ((term.csi_argv[i] - 100 + 8 + ANSI0) << ATTR_BGSHIFT);
       when 48: /* 256-colour background */
         if (i + 2 < argc && term.csi_argv[i + 1] == 5) {
           // set background to palette colour
@@ -1594,8 +1593,8 @@ do_dcs(void)
 
     otherwise:
       /* parser status initialization */
-      fg = win_get_colour(term.rvideo ? BG_COLOUR_I: FG_COLOUR_I);
-      bg = win_get_colour(term.rvideo ? FG_COLOUR_I: BG_COLOUR_I);
+      fg = win_get_colour(FG_COLOUR_I);
+      bg = win_get_colour(BG_COLOUR_I);
       if (!st) {
         st = term.imgs.parser_state = calloc(1, sizeof(sixel_state_t));
         sixel_parser_set_default_color(st);
@@ -1702,22 +1701,22 @@ do_colour_osc(bool has_index_arg, uint i, bool reset)
     s += len;
     if (osc % 100 == 5) {
       if (i == 0)
-        i = BOLD_FG_COLOUR_I;
-        // should we also flag that bold colour has been set explicitly 
-        // so it isn't overridden when setting foreground colour?
+        i = BOLD_COLOUR_I;
 #ifdef other_color_substitutes
       else if (i == 1)
-        i = UNDERLINE_FG_COLOUR_I;
+        i = UNDERLINE_COLOUR_I;
       else if (i == 2)
-        i = BLINK_FG_COLOUR_I;
+        i = BLINK_COLOUR_I;
       else if (i == 3)
-        i = REVERSE_FG_COLOUR_I;
+        i = REVERSE_COLOUR_I;
       else if (i == 4)
-        i = ITALIC_FG_COLOUR_I;
+        i = ITALIC_COLOUR_I;
 #endif
       else
         return;
     }
+    else if (i >= 256)
+      return;
   }
 
   colour c;
@@ -1727,7 +1726,7 @@ do_colour_osc(bool has_index_arg, uint i, bool reset)
     child_printf("\e]%u;", term.cmd_num);
     if (has_index_arg)
       child_printf("%u;", i);
-    c = win_get_colour(i);
+    c = i < COLOUR_NUM ? colours[i] : 0;  // should not be affected by rvideo
     child_printf("rgb:%04x/%04x/%04x\e\\",
                  red(c) * 0x101, green(c) * 0x101, blue(c) * 0x101);
   }
@@ -1789,6 +1788,12 @@ do_cmd(void)
     when 0 or 2: win_set_title(s);  // ignore icon title
     when 4:   do_colour_osc(true, 4, false);
     when 5:   do_colour_osc(true, 5, false);
+    when 6 or 106: {
+      int col, on;
+      if (sscanf(term.cmd_buf, "%u;%u", &col, &on) == 2)
+        if (col == 0)
+          term.enable_bold_colour = on;
+    }
     when 104: do_colour_osc(true, 4, true);
     when 105: do_colour_osc(true, 5, true);
     when 10:  do_colour_osc(false, FG_COLOUR_I, false);
@@ -2064,7 +2069,7 @@ term_write(const char *buf, uint len)
           continue;
         }
 
-        unsigned long long asav = term.curs.attr.attr;
+        cattrflags asav = term.curs.attr.attr;
 
         // Everything else
         int width;
@@ -2121,7 +2126,7 @@ term_write(const char *buf, uint len)
                   0, 0, 0, 0, 0, 0
                 };
                 uchar dispcode = linedraw_code[wc - 0x60];
-                term.curs.attr.attr |= ((unsigned long long)dispcode) << ATTR_GRAPH_SHIFT;
+                term.curs.attr.attr |= ((cattrflags)dispcode) << ATTR_GRAPH_SHIFT;
               }
 #endif
               wc = dispwc;
@@ -2142,7 +2147,7 @@ term_write(const char *buf, uint len)
                   0x81, 0x82, 0, 0, 0x85, 0x86, 0x87  // sum segments
                 };
                 uchar dispcode = techdraw_code[c - 0x21];
-                term.curs.attr.attr |= ((unsigned long long)dispcode) << ATTR_GRAPH_SHIFT;
+                term.curs.attr.attr |= ((cattrflags)dispcode) << ATTR_GRAPH_SHIFT;
               }
             }
           when CSET_GBCHR:  // NRC United Kingdom

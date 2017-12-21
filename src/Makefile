@@ -68,8 +68,6 @@ ifdef WSLTTY_VERSION
 CPPFLAGS += -DWSLTTY_VERSION="$(WSLTTY_VERSION)"
 endif
 
-CPPFLAGS += -DSTARTF_TITLEISLINKNAME=0x00000800 -DSTARTF_TITLEISAPPID=0x00001000
-
 ifndef RELEASE
   svn_rev := $(shell svn info 2>/dev/null | grep ^Revision: | sed 's/Revision: //')
   ifneq ($(svn_rev),)

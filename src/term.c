@@ -210,6 +210,7 @@ term_reset(bool full)
     term.wide_indic = false;
     term.wide_extra = false;
     term.disable_bidi = false;
+    term.enable_bold_colour = cfg.bold_as_colour;
   }
 
   term.virtuallines = 0;
@@ -1157,11 +1158,11 @@ term_paint(void)
 
           colour fg = win_get_colour(SEL_TEXT_COLOUR_I);
           if (fg == (colour)-1)
-            fg = truecolour(&tattr, tattr.truebg);
+            fg = apply_attr_colour(tattr, ACM_SIMPLE).truefg;
           static uint mindist = 22222;
           bool too_close = colour_dist(fg, tattr.truebg) < mindist;
           if (too_close)
-            fg = brighten(fg, tattr.truebg);
+            fg = brighten(fg, tattr.truebg, false);
           tattr.truefg = fg;
           tattr.attr = (tattr.attr & ~ATTR_FGMASK) | (TRUE_COLOUR << ATTR_FGSHIFT);
         }
@@ -1183,34 +1184,7 @@ term_paint(void)
         if (cfg.bell_flash_style & FLASH_REVERSE)
           tattr.attr ^= ATTR_REVERSE;
         else {
-          colour_i bgi = (tattr.attr & ATTR_BGMASK) >> ATTR_BGSHIFT;
-          if (term.rvideo) {
-            if (bgi >= 256)
-              bgi ^= 2;
-          }
-          colour bg = bgi >= TRUE_COLOUR ? tattr.truebg : colours[bgi];
-
-          colour_i fgi = (tattr.attr & ATTR_FGMASK) >> ATTR_FGSHIFT;
-          if (term.rvideo) {
-            if (fgi >= 256)
-              fgi ^= 2;
-          }
-          if (tattr.attr & ATTR_BOLD && cfg.bold_as_colour) {
-            if (fgi < 8) {
-              fgi |= 8;
-            }
-            else if (fgi >= 256 && fgi != TRUE_COLOUR && !cfg.bold_as_font) {
-              fgi |= 1;
-            }
-          }
-          colour fg = fgi >= TRUE_COLOUR ? tattr.truefg : colours[fgi];
-          if (tattr.attr & ATTR_DIM) {
-            fg = (fg & 0xFEFEFEFE) >> 1;
-            if (!cfg.bold_as_colour || fgi >= 256)
-              fg += (bg & 0xFEFEFEFE) >> 1;
-          }
-
-          tattr.truebg = brighten(bg, fg);
+          tattr.truebg = apply_attr_colour(tattr, ACM_VBELL_BG).truebg;
           tattr.attr = (tattr.attr & ~ATTR_BGMASK) | (TRUE_COLOUR << ATTR_BGSHIFT);
         }
       }
@@ -1617,22 +1591,27 @@ term_paint(void)
 #endif
       cattr attr = icp->attr;
       attr.attr &= ~ATTR_ITALIC;
+      int bglen = icp->len;
+      if (is_high_surrogate(icp->text[0])) {
+        // heuristic distinction: for non-BMP runs:
+        bglen = 1;
+      }
       static wchar * bgspace = 0;
       static int bgspaces = 0;
       // provide a sufficient number of spaces for the background
-      if (icp->len > bgspaces) {
+      if (bglen > bgspaces) {
         if (bgspace)
-          bgspace = renewn(bgspace, icp->len);
+          bgspace = renewn(bgspace, bglen);
         else
-          bgspace = newn(wchar, icp->len);
-        for (int k = bgspaces; k < icp->len; k++)
+          bgspace = newn(wchar, bglen);
+        for (int k = bgspaces; k < bglen; k++)
           bgspace[k] = ' ';
-        bgspaces = icp->len;
+        bgspaces = bglen;
       }
       // background: non-italic
-      win_text(icp->x, i, bgspace, icp->len, attr, icp->textattr, line->lattr, icp->has_rtl);
+      win_text(icp->x, i, bgspace, bglen, attr, icp->textattr, line->lattr | LATTR_DISP1, icp->has_rtl);
       // foreground: transparent and with extended clipping box
-      win_text(icp->x, i, icp->text, icp->len, icp->attr, icp->textattr, line->lattr, icp->has_rtl);
+      win_text(icp->x, i, icp->text, icp->len, icp->attr, icp->textattr, line->lattr | LATTR_DISP2, icp->has_rtl);
       free(icp->text);
       free(icp->textattr);
     }

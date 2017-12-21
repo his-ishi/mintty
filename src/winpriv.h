@@ -21,7 +21,7 @@ extern void clear_tabs(void);
 extern void add_tab(uint tabi, HWND wndi);
 
 extern COLORREF colours[COLOUR_NUM];
-extern colour brighten(colour c, colour against);
+extern colour brighten(colour c, colour against, bool monotone);
 
 extern LOGFONT lfont;
 
@@ -72,6 +72,7 @@ extern void win_key_reset(void);
 extern bool win_key_down(WPARAM, LPARAM);
 extern bool win_key_up(WPARAM, LPARAM);
 
+extern wchar * dewsl(wchar * wpath);
 extern void win_init_drop_target(void);
 
 extern void win_switch(bool back, bool alternate);

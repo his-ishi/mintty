@@ -18,7 +18,9 @@
 #include <windows.h>  // registry handling
 
 #include <termios.h>
-#include <sys/cygwin.h>
+#ifdef __CYGWIN__
+#include <sys/cygwin.h>  // cygwin_internal
+#endif
 
 
 #define dont_support_blurred
@@ -164,24 +166,27 @@ const config default_cfg = {
   .word_chars = "",
   .word_chars_excl = "",
   .use_system_colours = false,
+  .short_long_opts = false,
+  .bold_as_special = false,
+  .old_bold = false,
   .ime_cursor_colour = DEFAULT_COLOUR,
   .ansi_colours = {
-    [BLACK_I]        = 0x000000,
-    [RED_I]          = 0x0000BF,
-    [GREEN_I]        = 0x00BF00,
-    [YELLOW_I]       = 0x00BFBF,
-    [BLUE_I]         = 0xBF0000,
-    [MAGENTA_I]      = 0xBF00BF,
-    [CYAN_I]         = 0xBFBF00,
-    [WHITE_I]        = 0xBFBFBF,
-    [BOLD_BLACK_I]   = 0x404040,
-    [BOLD_RED_I]     = 0x4040FF,
-    [BOLD_GREEN_I]   = 0x40FF40,
-    [BOLD_YELLOW_I]  = 0x40FFFF,
-    [BOLD_BLUE_I]    = 0xFF6060,
-    [BOLD_MAGENTA_I] = 0xFF40FF,
-    [BOLD_CYAN_I]    = 0xFFFF40,
-    [BOLD_WHITE_I]   = 0xFFFFFF,
+    [BLACK_I]        = RGB(0x00, 0x00, 0x00),
+    [RED_I]          = RGB(0xBF, 0x00, 0x00),
+    [GREEN_I]        = RGB(0x00, 0xBF, 0x00),
+    [YELLOW_I]       = RGB(0xBF, 0xBF, 0x00),
+    [BLUE_I]         = RGB(0x00, 0x00, 0xBF),
+    [MAGENTA_I]      = RGB(0xBF, 0x00, 0xBF),
+    [CYAN_I]         = RGB(0x00, 0xBF, 0xBF),
+    [WHITE_I]        = RGB(0xBF, 0xBF, 0xBF),
+    [BOLD_BLACK_I]   = RGB(0x40, 0x40, 0x40),
+    [BOLD_RED_I]     = RGB(0xFF, 0x40, 0x40),
+    [BOLD_GREEN_I]   = RGB(0x40, 0xFF, 0x40),
+    [BOLD_YELLOW_I]  = RGB(0xFF, 0xFF, 0x40),
+    [BOLD_BLUE_I]    = RGB(0x60, 0x60, 0xFF),
+    [BOLD_MAGENTA_I] = RGB(0xFF, 0x40, 0xFF),
+    [BOLD_CYAN_I]    = RGB(0x40, 0xFF, 0xFF),
+    [BOLD_WHITE_I]   = RGB(0xFF, 0xFF, 0xFF)
   },
   .sixel_clip_char = W(" ")
 };
@@ -375,6 +380,9 @@ options[] = {
   {"WordCharsExcl", OPT_STRING, offcfg(word_chars_excl)},
   {"IMECursorColour", OPT_COLOUR, offcfg(ime_cursor_colour)},
   {"SixelClipChars", OPT_WSTRING, offcfg(sixel_clip_char)},
+  {"OldBold", OPT_BOOL, offcfg(old_bold)},
+  {"ShortLongOpts", OPT_BOOL, offcfg(short_long_opts)},
+  {"BoldAsRainbowSparkles", OPT_BOOL, offcfg(bold_as_special)},
 
   // ANSI colours
   {"Black", OPT_COLOUR, offcfg(ansi_colours[BLACK_I])},
@@ -1167,6 +1175,12 @@ load_config(string filename, int to_save)
     copy_config("load", &cfg, &file_cfg);
   }
 
+  bool free_filename = false;
+  if (*filename == '~' && filename[1] == '/') {
+    filename = asform("%s%s", home, filename + 1);
+    free_filename = true;
+  }
+
   if (access(filename, R_OK) == 0 && access(filename, W_OK) < 0)
     to_save = false;
 
@@ -1180,6 +1194,9 @@ load_config(string filename, int to_save)
       rc_filename = path_posix_to_win_w(filename);
     }
   }
+
+  if (free_filename)
+    delete(filename);
 
   if (file) {
     while (fgets(linebuf, sizeof linebuf, file)) {
@@ -1487,8 +1504,8 @@ closemuicache()
   }
 }
 
-static wchar *
-getreg(HKEY key, wchar * subkey, wchar * attribute)
+wchar *
+getregstr(HKEY key, wstring subkey, wstring attribute)
 {
 #if CYGWIN_VERSION_API_MINOR < 74
   (void)key;
@@ -1496,12 +1513,20 @@ getreg(HKEY key, wchar * subkey, wchar * attribute)
   (void)attribute;
   return 0;
 #else
-  DWORD blen;
-  int res = RegGetValueW(key, subkey, attribute, RRF_RT_ANY, 0, 0, &blen);
+  // RegGetValueW is easier but not supported on Windows XP
+  HKEY sk = 0;
+  RegOpenKeyW(key, subkey, &sk);
+  if (!sk)
+    return 0;
+  DWORD type;
+  DWORD len;
+  int res = RegQueryValueExW(sk, attribute, 0, &type, 0, &len);
   if (res)
     return 0;
-  wchar * val = malloc(blen);
-  res = RegGetValueW(key, subkey, attribute, RRF_RT_ANY, 0, val, &blen);
+  if (!(type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ))
+    return 0;
+  wchar * val = malloc (len);
+  res = RegQueryValueExW(sk, attribute, 0, &type, (void *)val, &len);
   if (res) {
     free(val);
     return 0;
@@ -1515,12 +1540,12 @@ muieventlabel(wchar * event)
 {
   // HKEY_CURRENT_USER\AppEvents\EventLabels\SystemAsterisk
   // DispFileName -> "@mmres.dll,-5843"
-  wchar * rsr = getreg(evlabels, event, W("DispFileName"));
+  wchar * rsr = getregstr(evlabels, event, W("DispFileName"));
   if (!rsr)
     return 0;
   // HKEY_CURRENT_USER\Software\Classes\Local Settings\MuiCache\N\M
   // "@mmres.dll,-5843" -> "Sternchen"
-  wchar * lbl = getreg(muicache, 0, rsr);
+  wchar * lbl = getregstr(muicache, 0, rsr);
   free(rsr);
   return lbl;
 }
@@ -1970,8 +1995,8 @@ download_scheme(char * url)
 #else
   fclose(sf);
   remove(sfn);
-#endif
   free(sfn);
+#endif
 
   return sch;
 }
