@@ -40,6 +40,9 @@ char * mintty_debug;
 #include <propkey.h>
 #endif
 
+#include <sys/stat.h>
+#include <fcntl.h>  // open flags
+
 #ifndef INT16
 #define INT16 short
 #endif
@@ -419,7 +422,8 @@ win_to_top(HWND top_wnd)
   SetForegroundWindow(top_wnd);
   // SetActiveWindow(top_wnd);
 
-  ShowWindow(top_wnd, SW_RESTORE);
+  if (IsIconic(top_wnd))
+    ShowWindow(top_wnd, SW_RESTORE);
 }
 
 static HWND first_wnd, last_wnd;
@@ -1978,7 +1982,8 @@ static struct {
     when WM_MOUSEACTIVATE:
       // prevent accidental selection on activation (#717)
       if (LOWORD(lp) == HTCLIENT && HIWORD(lp) == WM_LBUTTONDOWN)
-        return MA_ACTIVATEANDEAT;
+        if (!getenv("ConEmuPID"))
+          return MA_ACTIVATEANDEAT;
 
     when WM_ACTIVATE:
       if ((wp & 0xF) != WA_INACTIVE) {
@@ -2373,7 +2378,7 @@ exit_mintty(void)
 #include <shlobj.h>
 
 static wchar *
-get_shortcut_icon_location(wchar * iconfile)
+get_shortcut_icon_location(wchar * iconfile, bool * wdpresent)
 {
   IShellLinkW * shell_link;
   IPersistFile * persist_file;
@@ -2448,6 +2453,12 @@ get_shortcut_icon_location(wchar * iconfile)
       free(widx);
     if (* wenv)
       free(wenv);
+
+    // also retrieve working directory:
+    if (wdpresent) {
+      hres = shell_link->lpVtbl->GetWorkingDirectory(shell_link, wil, MAX_PATH);
+      *wdpresent = SUCCEEDED(hres) && *wil;
+    }
   }
   iconex:
 
@@ -2892,6 +2903,7 @@ opts[] = {
   {"daemon",     no_argument,       0, 'D'},
   {"nopin",      no_argument,       0, ''},  // short option not enabled
   {"store-taskbar-properties", no_argument, 0, ''},  // no short option
+  {"trace",      required_argument, 0, ''},  // short option not enabled
   // further xterm-style convenience options, all without short option:
   {"fg",         required_argument, 0, OPT_FG},
   {"bg",         required_argument, 0, OPT_BG},
@@ -2981,8 +2993,9 @@ main(int argc, char *argv[])
   }
 
 #if CYGWIN_VERSION_DLL_MAJOR >= 1005
+  bool wdpresent = true;
   if (invoked_from_shortcut) {
-    wchar * icon = get_shortcut_icon_location(sui.lpTitle);
+    wchar * icon = get_shortcut_icon_location(sui.lpTitle, &wdpresent);
 # ifdef debuglog
     fprintf(mtlog, "icon <%ls>\n", icon); fflush(mtlog);
 # endif
@@ -3204,6 +3217,12 @@ main(int argc, char *argv[])
         if (*oa)
           option_error(__("Syntax error in geometry argument '%s'"), optarg, 0);
       }
+      when '': {
+        int tfd = open(optarg, O_WRONLY | O_CREAT | O_APPEND | O_NOCTTY, 0600);
+        close(1);
+        dup(tfd);
+        close(tfd);
+      }
     }
   }
   copy_config("main after -o", &file_cfg, &cfg);
@@ -3211,6 +3230,17 @@ main(int argc, char *argv[])
     load_scheme(cfg.colour_scheme);
   else if (*cfg.theme_file)
     load_theme(cfg.theme_file);
+
+#if CYGWIN_VERSION_DLL_MAJOR >= 1005
+  if (!wdpresent) {
+    if (support_wsl) {
+      chdir(getenv("LOCALAPPDATA"));
+      chdir("Temp");
+    }
+    else
+      chdir(home);
+  }
+#endif
 
   finish_config();
 
