@@ -1,11 +1,12 @@
 // term.c (part of mintty)
-// Copyright 2008-12 Andy Koppe
+// Copyright 2008-12 Andy Koppe, 2016-2018 Thomas Wolff
 // Adapted from code from PuTTY-0.60 by Simon Tatham and team.
 // Licensed under the terms of the GNU General Public License v3 or later.
 
 #include "termpriv.h"
 
 #include "win.h"
+#include "winimg.h"
 #include "charset.h"
 #include "child.h"
 #include "winsearch.h"
@@ -1100,6 +1101,381 @@ term_erase(bool selective, bool line_only, bool from_begin, bool to_end)
   }
 }
 
+#define EM_pres 1
+#define EM_pict 2
+#define EM_text 4
+#define EM_emoj 8
+#define EM_base 16
+
+struct emoji_base {
+  void * res;  // filename (char*/wchar*) or cached image
+  uint tags: 11;
+  xchar ch: 21;
+} __attribute__((packed));
+
+struct emoji_base emoji_bases[] = {
+#include "emojibase.t"
+};
+
+static int
+emoji_idx(xchar ch)
+{
+  // binary search in table
+  int min = 0;
+  int max = lengthof(emoji_bases);
+  int mid;
+  while (max >= min) {
+    mid = (min + max) / 2;
+    if (emoji_bases[mid].ch < ch) {
+      min = mid + 1;
+    } else if (emoji_bases[mid].ch > ch) {
+      max = mid - 1;
+    } else {
+      return mid;
+    }
+  }
+  return -1;
+}
+
+static uint
+emoji_tags(int i)
+{
+  if (i >= 0)
+    return emoji_bases[i].tags;
+  else
+    return 0;
+}
+
+#define echar16
+
+#ifdef echar16
+// emoji component encoding to wchar to save half the table size
+#define echar wchar
+#define ee(x) x >= 0xE0000 ? (wchar)((x & 0xFFF) + 0x6000): x >= 0x1F000 ? (wchar)((x & 0xFFF) + 0x5000) : x
+#define ed(x) ((x >> 12) == 6 ? (xchar)x + (0xE0000 - 0x6000) : (x >> 12) == 5 ? (xchar)x + (0x1F000 - 0x5000) : x)
+#else
+#define echar xchar
+#define ee(x) x
+#define ed(x) x
+#endif
+
+struct emoji_seq {
+  void * res;  // filename (char*/wchar*) or cached image
+  echar chs[8];
+};
+
+struct emoji_seq emoji_seqs[] = {
+// Note that shorter sequences are expected to be sorted behind longer ones!
+#include "emojiseqs.t"
+};
+
+struct emoji {
+  int len: 7;   // emoji width in character cells (== # termchar positions)
+  bool seq: 1;  // true: from emoji_seq, false: from emoji_base
+  int idx: 24;  // index in either emoji_seq or emoji_base
+} __attribute__((packed));
+
+#define dont_debug_emojis 1
+
+/*
+   Derive file name and path name from emoji sequence; store it.
+ */
+static bool
+check_emoji(struct emoji e)
+{
+  wchar * * efnpoi;
+  if (e.seq) {
+    efnpoi = (wchar * *)&emoji_seqs[e.idx].res;
+  }
+  else {
+    efnpoi = (wchar * *)&emoji_bases[e.idx].res;
+  }
+  if (*efnpoi) { // emoji resource was checked before
+    return **efnpoi;  // ... successfully?
+  }
+
+  char style = cfg.emojis;
+fallback:;
+
+ /*
+    File name patterns:
+    EmojiOne: 0023-20e3.png
+    Noto Emoji: emoji_u0023_20e3.png
+  */
+  char * pre;
+  char * fmt = "%04x";
+  char * sep = "-";
+  char * suf = ".png";
+  bool zwj = true;
+  bool sel = true;
+  switch (style) {
+    when EMOJIS_NOTO:
+      pre = "noto/emoji_u";
+      sep = "_";
+      zwj = true;
+      sel = false;
+    when EMOJIS_ONE:
+      pre = "emojione/";
+      sep = "-";
+      zwj = false;
+      sel = false;
+    when EMOJIS_APPLE:
+      pre = "apple/";
+    when EMOJIS_GOOGLE:
+      pre = "google/";
+    when EMOJIS_TWITTER:
+      pre = "twitter/";
+    when EMOJIS_FB:
+      pre = "facebook/";
+    when EMOJIS_SAMSUNG:
+      pre = "samsung/";
+    when EMOJIS_WINDOWS:
+      pre = "windows/";
+    when EMOJIS_NONE:
+      pre = "common/";
+    otherwise:
+      return false;
+  }
+  char * en = strdup(pre);
+  char ec[6];
+  if (e.seq) {
+    for (uint i = 0; i < lengthof(emoji_seqs->chs) && ed(emoji_seqs[e.idx].chs[i]); i++) {
+      xchar xc = ed(emoji_seqs[e.idx].chs[i]);
+      if ((xc != 0xFE0F || sel) && (xc != 0x200D || zwj)) {
+        if (i)
+          strappend(en, sep);
+        sprintf(ec, fmt, xc);
+        strappend(en, ec);
+      }
+    }
+  }
+  else {
+    sprintf(ec, "%04x", emoji_bases[e.idx].ch);
+    strappend(en, ec);
+  }
+  strappend(en, suf);
+  wchar * wen = cs__utftowcs(en);
+
+  char * ef = get_resource_file(W("emojis"), wen, false);
+#ifdef debug_emojis
+  printf("emoji <%s> file <%s>\n", en, ef);
+#endif
+  free(wen);
+  free(en);
+
+  if (ef) {
+    * efnpoi = path_posix_to_win_w(ef);
+    free(ef);
+    return true;
+  }
+  else {
+    // if no emoji graphics found, fallback to "common" emojis
+    if (style) {
+      style = 0;
+      goto fallback;
+    }
+
+    * efnpoi = W("");  // indicate "checked but not found"
+    return false;
+  }
+}
+
+static int
+match_emoji_seq(termchar * d, int maxlen, echar * chs)
+{
+  int l_text = 0; // number of matched text base character positions
+  termchar * basechar = d;
+  termchar * curchar = d;
+
+  for (uint i = 0; i < lengthof(emoji_seqs->chs) && ed(chs[i]); i++) {
+    if (!curchar)
+      return 0;
+    if (curchar == basechar)
+      l_text++;
+    xchar chtxt = curchar->chr;
+    if (is_high_surrogate(chtxt)) {
+      if (curchar->cc_next) {
+        curchar += curchar->cc_next;
+        if (is_low_surrogate(curchar->chr))
+          chtxt = combine_surrogates(chtxt, curchar->chr);
+        else
+          return 0;
+      }
+      else
+        return 0;
+    }
+    if (ed(chs[i]) != chtxt)
+      return 0;
+
+    // next text char
+    if (curchar->cc_next)
+      curchar += curchar->cc_next;
+    else if (maxlen > 1) {
+      basechar++;
+      curchar = basechar;
+      maxlen--;
+      if (curchar->chr == UCSWIDE && maxlen > 1) {
+        l_text++;
+        basechar++;
+        curchar = basechar;
+        maxlen--;
+      }
+    }
+    else
+      curchar = 0;
+  }
+  if (curchar && curchar != basechar)
+    return 0;
+
+  return l_text;
+}
+
+static struct emoji
+match_emoji(termchar * d, int maxlen)
+{
+  struct emoji emoji;
+  emoji.len = 0;
+
+  xchar ch = d->chr;
+  termchar * comb = d;
+  if (is_high_surrogate(ch) && d->cc_next) {
+    comb = d + d->cc_next;
+    if (is_low_surrogate(comb->chr))
+      ch = combine_surrogates(ch, comb->chr);
+  }
+  if (comb->cc_next)
+    comb += comb->cc_next;
+  else
+    comb = 0;
+  int tagi = emoji_idx(ch);
+  uint tags = emoji_tags(tagi);
+  if (tags) {
+#if defined(debug_emojis) && debug_emojis > 2
+    printf("%04X%s%s%s%s%s\n", ch,
+           tags & EM_pres ? " pres" : "",
+           tags & EM_pict ? " pict" : "",
+           tags & EM_text ? " text" : "",
+           tags & EM_emoj ? " emoj" : "",
+           tags & EM_base ? " base" : ""
+          );
+#endif
+    /* handle the following patterns:
+	#basechars (not counting combining marks)
+		emoji sequence
+			handling
+	listed in emoji_seqs (indicated by EM_base):
+	1	1F3F4 BLA E007F	tag seq
+	2	...		zwj seq, e.g. 1F3F4 200D 2620 FE0F Pirate Flag
+	3,4	...		zwj seq: square format → width 3/4
+	1	N FE0F 20E3	keycap seq
+	2	X X		flag seq / modifier seq
+	handled separately:
+	1	X FE0E		variation seq: strip; normal display
+	1	X FE0F		variation seq: emoji display
+	1	X [Emoji_Presentation]	emoji display
+	1	X [Extended_Pictographic]	if not in variation seq
+	1	X [Emoji]	ignore / normal display; not listed in tables
+     */
+    struct emoji longest = {0, 0, 0};
+    bool foundseq = false;
+    if (tags & EM_base) {
+      for (uint i = 0; i < lengthof(emoji_seqs); i++) {
+        int len = match_emoji_seq(d, maxlen, emoji_seqs[i].chs);
+        if (len) {
+#if defined(debug_emojis) && debug_emojis > 1
+          printf("match");
+          for (uint k = 0; k < lengthof(emoji_seqs->chs) && ed(emoji_seqs[i].chs[k]); k++)
+            printf(" %04X", ed(emoji_seqs[i].chs[k]));
+          printf("\n");
+#endif
+          emoji.seq = true;
+          emoji.idx = i;
+          emoji.len = len;
+          // match_full_seq: found a match => use it
+          // ¬match_full_seq: if there is no graphics, continue 
+          // matching for partial prefixes; note this does not work for 
+          // ZWJ sequences as the combining ZWJ will prevent a shorter match
+          bool match_full_seq = false;
+          if (match_full_seq || check_emoji(emoji))
+            break;
+          else {
+            // found a match but there is no emoji graphics for it
+            // remember longest match in case we don't find another
+            if (!foundseq) {
+              longest = emoji;
+              foundseq = true;
+            }
+            // invalidate this match, continue matching
+            emoji.len = 0;
+          }
+        }
+      }
+    }
+    if (!emoji.len) {
+      wchar combchr = 0;
+      if (comb) {
+        if (comb->cc_next)
+          combchr = -1;
+        else
+          combchr = comb->chr;
+      }
+      emoji.seq = false;
+      emoji.idx = tagi;
+      emoji.len = maxlen > 1 && d[1].chr == UCSWIDE ? 2 : 1;
+      /*
+	remaining, non-sequence patterns:
+	1	X FE0E		variation seq: strip; normal display
+	1	X FE0F		variation seq: emoji display
+	1	X [Emoji_Presentation]	emoji display
+	1	X [Extended_Pictographic]	if not in variation seq
+       */
+      if ((tags & EM_text) && combchr == 0xFE0E) {
+        // strip VARIATION SELECTOR-15, display text style
+        d->cc_next = 0;
+        emoji.len = 0;
+      }
+      else if ((tags & EM_emoj) && combchr == 0xFE0F) {
+        // strip VARIATION SELECTOR-16, display emoji style
+        d->cc_next = 0;
+      }
+      else if ((tags & EM_pres) && !combchr) {
+        // display presentation
+      }
+      else if ((tags & EM_pict) && !(tags & (EM_text | EM_emoj)) && !combchr) {
+        // display pictographic
+      }
+      else
+        emoji.len = 0;
+    }
+    if (!emoji.len) {
+      // not found another match; if we had a "longest match" before, 
+      // but continued to search because it had no graphics, let's use it
+      if (foundseq)
+        return longest;
+    }
+  }
+
+  return emoji;
+}
+
+static void
+emoji_show(int x, int y, struct emoji e, int elen, cattr eattr, ushort lattr)
+{
+  (void)eattr;
+  wchar * efn;
+  if (e.seq) {
+    efn = emoji_seqs[e.idx].res;
+  }
+  else {
+    efn = emoji_bases[e.idx].res;
+  }
+#ifdef debug_emojis
+  printf("emoji_show <%ls>\n", efn);
+#endif
+  if (efn && *efn)
+    win_emoji_show(x, y, efn, elen, lattr);
+}
+
 void
 term_paint(void)
 {
@@ -1122,6 +1498,9 @@ term_paint(void)
     termline *displine = term.displines[i];
     termchar *dispchars = displine->chars;
     termchar newchars[term.cols];
+
+    // Prevent nested emoji sequence matching from matching partial subseqs
+    int emoji_col = 0;  // column from which to match for emoji sequences
 
    /*
     * First loop: work along the line deciding what we want
@@ -1216,6 +1595,58 @@ term_paint(void)
         if (term.has_focus && term.tblinker2)
           tchar = ' ';
         tattr.attr &= ~ATTR_BLINK2;
+      }
+
+     /* Match emoji sequences
+      * and replace by emoji indicators
+      */
+      if (cfg.emojis && j >= emoji_col) {
+        struct emoji e;
+        if ((tattr.attr & TATTR_EMOJI) && !(tattr.attr & ATTR_FGMASK)) {
+          // previously marked subsequent emoji sequence component
+          e.len = 0;
+        }
+        else
+          e = match_emoji(d, term.cols - j);
+        if (e.len) {  // we have matched an emoji (sequence)
+          // avoid subsequent matching of a partial emoji subsequence
+          emoji_col = j + e.len;
+
+          // check whether emoji graphics exist for the emoji
+          bool ok = check_emoji(e);
+
+          // check whether all emoji components have the same attributes
+          bool equalattrs = true;
+          for (int i = 1; i < e.len && equalattrs; i++) {
+#           define IGNATTR (ATTR_WIDE | ATTR_FGMASK | TATTR_COMBINING)
+            if ((d[i].attr.attr & ~IGNATTR) != (d->attr.attr & ~IGNATTR)
+               || d[i].attr.truebg != d->attr.truebg
+               )
+              equalattrs = false;
+          }
+#ifdef debug_emojis
+          printf("matched len %d seq %d idx %d ok %d atr %d\n", e.len, e.seq, e.idx, ok, equalattrs);
+#endif
+
+          // modify character data to trigger later emoji display
+          if (ok && equalattrs) {
+            d->attr.attr &= ~ ATTR_FGMASK;
+            d->attr.attr |= TATTR_EMOJI | e.len;
+
+            //d->attr.truefg = (uint)e;
+            struct emoji * ee = &e;
+            uint em = *(uint *)ee;
+            d->attr.truefg = em;
+
+            // refresh cashed copy
+            tattr = d->attr;
+            for (int i = 1; i < e.len; i++) {
+              d[i].attr.attr &= ~ ATTR_FGMASK;
+              d[i].attr.attr |= TATTR_EMOJI;
+              d[i].attr.truefg = em;
+            }
+          }
+        }
       }
 
      /* Mark box drawing, block and some other characters 
@@ -1378,6 +1809,13 @@ term_paint(void)
    /*
     * Finally, loop once more and actually do the drawing.
     */
+    // control line overlay; as opposed to character overlay implemented 
+    // by the "pending overlay" buffer below, this works by repeating 
+    // the last line loop and only drawing the overlay characters this time
+    bool overlaying = false;
+    overlay:;
+    bool do_overlay = false;
+
     int maxtextlen = max(term.cols, 16);
     wchar text[maxtextlen];
     cattr textattr[maxtextlen];
@@ -1392,49 +1830,6 @@ term_paint(void)
 
     displine->lattr = line->lattr;
 
-#define dont_use_italic_chunk_stack
-
-#ifdef use_italic_chunk_stack
-    static struct italic_chunk {
-      int x;
-      wchar * text;
-      int len;
-      cattr attr;
-      cattr * textattr;
-      bool has_rtl;
-    } * italic_stack = 0;
-    static int italic_chunks = 0;
-    static int italic_chunkmax = 0;
-
-#define dont_debug_italic_chunks
-
-    void push_text(int x, wchar * text, int len, cattr attr, cattr * textattr, bool has_rtl)
-    {
-#ifdef debug_italic_chunks
-      printf("%2d:%d++ <", i, italic_chunks);
-      for (int k = 0; k < len; k++)
-        printf("%lc", text[k]);
-      printf(">\n");
-#endif
-      if (italic_chunks >= italic_chunkmax) {
-        italic_chunkmax += 5;
-        if (italic_stack)
-          italic_stack = renewn(italic_stack, italic_chunkmax);
-        else
-          italic_stack = newn(struct italic_chunk, italic_chunkmax);
-      }
-      struct italic_chunk * icp = &italic_stack[italic_chunks++];
-      icp->x = x;
-      icp->text = newn(wchar, len);
-      wcsncpy(icp->text, text, len);
-      icp->len = len;
-      icp->attr = attr;
-      icp->textattr = newn(cattr, len);
-      for (int k = 0; k < len; k++)
-        icp->textattr[k] = textattr[k];
-      icp->has_rtl = has_rtl;
-    }
-#else
     // buffer for pending overlay output; for support of character overhang
     // (italics and wide glyphs), such chunks are output in two steps;
     // the first output paints the background (and possibly manual underline)
@@ -1454,7 +1849,6 @@ term_paint(void)
         ovl_len = 0;
       }
     }
-#endif
 
 #define dont_debug_run
 
@@ -1473,10 +1867,43 @@ term_paint(void)
       if (*t)
         printf("out <%ls>\n", t);
 #endif
-      if (attr.attr & (ATTR_ITALIC | TATTR_COMBDOUBL)) {
-#ifdef use_italic_chunk_stack
-        push_text(x, text, len, attr, textattr, has_rtl);
-#else
+      if (attr.attr & TATTR_EMOJI) {
+        int elen = attr.attr & ATTR_FGMASK;
+        cattr eattr = attr;
+        eattr.attr &= ~(ATTR_WIDE | TATTR_COMBINING);
+        wchar esp[] = W("        ");
+        if (elen) {
+          if (!overlaying) {
+            win_text(x, y, esp, elen, eattr, textattr, lattr | LATTR_DISP1, has_rtl);
+            flush_text();
+          }
+#ifdef debug_emojis
+          eattr.attr &= ~(ATTR_BGMASK | ATTR_FGMASK);
+          eattr.attr |= 6 << ATTR_BGSHIFT | 4;
+          esp[0] = '0' + elen;
+          win_text(x, y, esp, elen, eattr, textattr, lattr | LATTR_DISP2, has_rtl);
+#endif
+          if (cfg.emoji_placement == EMPL_FULL && !overlaying)
+            do_overlay = true;  // display in overlaying loop
+          else {
+            //struct emoji e = (struct emoji) eattr.truefg;
+            struct emoji * ee = (void *)&eattr.truefg;
+            emoji_show(x, y, *ee, elen, eattr, lattr);
+          }
+        }
+#ifdef debug_emojis
+        else {
+          eattr.attr &= ~(ATTR_BGMASK | ATTR_FGMASK);
+          eattr.attr |= 4 << ATTR_BGSHIFT | 6;
+          esp[0] = '0';
+          win_text(x, y, esp, 1, eattr, textattr, lattr | LATTR_DISP2, has_rtl);
+        }
+#endif
+      }
+      else if (overlaying) {
+        return;
+      }
+      else if (attr.attr & (ATTR_ITALIC | TATTR_COMBDOUBL)) {
         win_text(x, y, text, len, attr, textattr, lattr | LATTR_DISP1, has_rtl);
         flush_text();
         ovl_x = x;
@@ -1487,17 +1914,26 @@ term_paint(void)
         memcpy(ovl_textattr, textattr, len * sizeof(cattr));
         ovl_lattr = lattr;
         ovl_has_rtl = has_rtl;
-#endif
       }
-      else
+      else {
         win_text(x, y, text, len, attr, textattr, lattr, has_rtl);
+        flush_text();
+      }
     }
 
+   /*
+    * Third loop, for actual drawing.
+    */
     for (int j = 0; j < term.cols; j++) {
       termchar *d = chars + j;
       cattr tattr = newchars[j].attr;
       wchar tchar = newchars[j].chr;
-      //wchar tchar2 = j + 1 < term.cols ? d[1].chr : 0;
+      xchar xtchar = tchar;
+      if (is_high_surrogate(tchar) && newchars[j].cc_next) {
+        termchar *t1 = &newchars[j + newchars[j].cc_next];
+        if (is_low_surrogate(t1->chr))
+          xtchar = combine_surrogates(tchar, t1->chr);
+      }
 
       if ((dispchars[j].attr.attr ^ tattr.attr) & ATTR_WIDE)
         dirty_line = true;
@@ -1530,6 +1966,16 @@ term_paint(void)
         trace_run("cc"), break_run = true;
 
 #ifdef keep_non_BMP_characters_together_in_one_chunk
+      // this was expected to speed up non-BMP display 
+      // but the effect is not significant, if any
+      // also, this spoils two other issues about non-BMP display:
+#warning non-BMP RTL will be in wrong order
+#warning some non-BMP ranges (e.g. Egyptian Hieroglyphs) are not cell-adjusted
+     /*
+      * Break when exceeding output buffer length.
+      */
+      if (is_high_surrogate(d->chr) && textlen + 2 >= maxtextlen)
+        trace_run("max"), break_run = true;
      /*
       * Break when switching BMP/non-BMP.
       */
@@ -1551,15 +1997,7 @@ term_paint(void)
           trace_run("len"), break_run = true;
       }
 
-      uchar tbc = bidi_class(tchar);
-#ifdef dont_break_at_non_BMP
-#warning would need buffer overflow handling!
-#warning has no effect this way, and does not seem to be needed...
-      if ((tchar & 0xFC00) == 0xD800 && (tchar2 & 0xFC00) == 0xDC00)
-        tbc = bidi_class(((ucschar) (tchar - 0xD7C0) << 10) | (tchar2 & 0x03FF));
-      else
-        tbc = bidi_class(tchar);
-#endif
+      uchar tbc = bidi_class(xtchar);
 
       if (textlen && tbc != bc) {
         if (!is_sep_class(tbc) && !is_sep_class(bc))
@@ -1573,15 +2011,7 @@ term_paint(void)
       bc = tbc;
 
       if (break_run) {
-#ifdef debug_italic_chunks
-        if (*text > ' ' && textlen > 1) {
-          printf("%2d: ?? <", i);
-          for (int k = 0; k < textlen; k++)
-            printf("%lc", text[k]);
-          printf(">\n");
-        }
-#endif
-        if (dirty_run && textlen)
+        if ((dirty_run && textlen) || overlaying)
           out_text(start, i, text, textlen, attr, textattr, line->lattr, has_rtl);
         start = j;
         textlen = 0;
@@ -1669,47 +2099,20 @@ term_paint(void)
     }
     if (dirty_run && textlen)
       out_text(start, i, text, textlen, attr, textattr, line->lattr, has_rtl);
-#ifndef use_italic_chunk_stack
-    flush_text();
-#else
+    if (!overlaying)
+      flush_text();
 
-    for (int j = italic_chunks - 1; j >= 0; j--) {
-      struct italic_chunk * icp = &italic_stack[j];
-#ifdef debug_italic_chunks
-      printf("%2d:%d-- <", i, j);
-      for (int k = 0; k < icp->len; k++)
-        printf("%lc", icp->text[k]);
-      printf(">\n");
-#endif
-      cattr attr = icp->attr;
-      attr.attr &= ~ATTR_ITALIC;
-      int bglen = icp->len;
-      if (is_high_surrogate(icp->text[0])) {
-        // heuristic distinction: for non-BMP runs:
-        bglen = 1;
-      }
-      static wchar * bgspace = 0;
-      static int bgspaces = 0;
-      // provide a sufficient number of spaces for the background
-      if (bglen > bgspaces) {
-        if (bgspace)
-          bgspace = renewn(bgspace, bglen);
-        else
-          bgspace = newn(wchar, bglen);
-        for (int k = bgspaces; k < bglen; k++)
-          bgspace[k] = ' ';
-        bgspaces = bglen;
-      }
-      // background: non-italic
-      win_text(icp->x, i, bgspace, bglen, attr, icp->textattr, line->lattr | LATTR_DISP1, icp->has_rtl);
-      // foreground: transparent and with extended clipping box
-      win_text(icp->x, i, icp->text, icp->len, icp->attr, icp->textattr, line->lattr | LATTR_DISP2, icp->has_rtl);
-      free(icp->text);
-      free(icp->textattr);
+   /*
+    * Draw any pending overlay characters in one more loop.
+    */
+    if (do_overlay && !overlaying) {
+      overlaying = true;
+      goto overlay;
     }
-    italic_chunks = 0;
-#endif
 
+   /*
+    * Release the line data fetched from the screen or scrollback buffer.
+    */
     release_line(line);
   }
 

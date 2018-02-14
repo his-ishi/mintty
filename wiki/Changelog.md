@@ -1,3 +1,28 @@
+### 2.8.4 (10 Feb 2018) ###
+
+Character handling and rendering
+  * Emoji support (mintty/wsltty#82, #600, ~#671, ~#430).
+  * Fixed double-width handling within right-to-left text.
+
+Window handling
+  * Ctrl+Alt+mouse-click/drag moves the window (#729).
+  * Apply Virtual Tab position catching also on Alt+F2 (#699).
+  * Workaround for Windows failing to consider the taskbar properly when maximizing with no or frame-only border (#732).
+  * Workaround for caption-less window exceeding borders (#733) on Windows 10.
+
+Mouse handling
+  * More selective suppression of mouse action on focus-click (mintty/wsltty#88, #717).
+  * Fixed mouse function in search bar (#85), broken since 2.8.2 (#717).
+
+Desktop integration
+  * Support for taskbar "Tasks" list ("jump list") (#290).
+  * Session launcher icons (#699).
+
+Configuration
+  * Options Emojis, EmojiPlacement to configure emojis style and display
+  * Option TaskCommands to configure a taskbar icon task list ("jump list").
+  * Limit tweaking of empty shortcut start dir to Start menu case (#737).
+
 ### 2.8.3 (8 Jan 2018) ###
 
 Character rendering

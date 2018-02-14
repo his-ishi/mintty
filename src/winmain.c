@@ -1424,6 +1424,28 @@ win_adapt_term_size(bool sync_size_with_font, bool scale_font_with_size)
   win_schedule_update();
 }
 
+static int
+win_fix_taskbar_max(int show_cmd)
+{
+  if (border_style && show_cmd == SW_SHOWMAXIMIZED) {
+    // (SW_SHOWMAXIMIZED == SW_MAXIMIZE)
+    // workaround for Windows failing to consider the taskbar properly 
+    // when maximizing without WS_CAPTION in style (#732)
+    MONITORINFO mi;
+    get_my_monitor_info(&mi);
+    RECT ar = mi.rcWork;
+    RECT mr = mi.rcMonitor;
+    if (mr.top != ar.top || mr.bottom != ar.bottom || mr.left != ar.left || mr.right != ar.right) {
+      show_cmd = SW_RESTORE;
+      SetWindowPos(wnd, null, 
+                   ar.left, ar.top, ar.right - ar.left, ar.bottom - ar.top, 
+                   SWP_NOZORDER);
+      win_adapt_term_size(false, false);
+    }
+  }
+  return show_cmd;
+}
+
 /*
  * Maximise or restore the window in response to a server-side request.
  * Argument value of 2 means go fullscreen.
@@ -1431,6 +1453,7 @@ win_adapt_term_size(bool sync_size_with_font, bool scale_font_with_size)
 void
 win_maximise(int max)
 {
+//printf("win_max %d is_full %d IsZoomed %d\n", max, win_is_fullscreen, IsZoomed(wnd));
   if (max == -2) // toggle full screen
     max = win_is_fullscreen ? 0 : 2;
   if (IsZoomed(wnd)) {
@@ -1440,9 +1463,19 @@ win_maximise(int max)
       make_fullscreen();
   }
   else if (max) {
-    if (max == 2)
+    if (max == 2) {  // full screen
       go_fullscr_on_max = true;
-    ShowWindow(wnd, SW_MAXIMIZE);
+      ShowWindow(wnd, SW_MAXIMIZE);
+    }
+    else if (max == 1) {  // maximize
+      // this would apply the workaround to consider the taskbar
+      // but it would make maximizing irreversible, so let's not do it here
+      //ShowWindow(wnd, win_fix_taskbar_max(SW_MAXIMIZE));
+      // rather let Windows maximize as it prefers, including the bug
+      ShowWindow(wnd, SW_MAXIMIZE);
+    }
+    else
+      ShowWindow(wnd, SW_MAXIMIZE);
   }
 }
 
@@ -1982,8 +2015,15 @@ static struct {
     when WM_MOUSEACTIVATE:
       // prevent accidental selection on activation (#717)
       if (LOWORD(lp) == HTCLIENT && HIWORD(lp) == WM_LBUTTONDOWN)
+#ifdef suppress_click_on_focus_at_message_level
+#warning this would also obstruct mouse function in the search bar
+        // ignore focus click
         if (!getenv("ConEmuPID"))
           return MA_ACTIVATEANDEAT;
+#else
+        // support selective mouse click suppression
+        click_focus_token = true;
+#endif
 
     when WM_ACTIVATE:
       if ((wp & 0xF) != WA_INACTIVE) {
@@ -2195,6 +2235,18 @@ static struct {
       }
       break;
 #endif
+    }
+
+    when WM_NCHITTEST: {
+      LRESULT result = DefWindowProcW(wnd, message, wp, lp);
+
+      // implement Ctrl+Alt+click to move window
+      if (result == HTCLIENT &&
+          (GetKeyState(VK_MENU) & 0x80) && (GetKeyState(VK_CONTROL) & 0x80))
+        // redirect click target from client area to caption
+        return HTCAPTION;
+      else
+        return result;
     }
   }
 
@@ -2473,155 +2525,6 @@ get_shortcut_icon_location(wchar * iconfile, bool * wdpresent)
 
 #endif
 
-static void
-configure_taskbar(void)
-{
-#define no_patch_jumplist
-#ifdef patch_jumplist
-#include "jumplist.h"
-  // test data
-  wchar * jump_list_title[] = {
-    W("title1"), W(""), W(""), W("mä€"), W(""), W(""), W(""), W(""), W(""), W(""), 
-  };
-  wchar * jump_list_cmd[] = {
-    W("-o Rows=15"), W("-o Rows=20"), W(""), W("-t mö€"), W(""), W(""), W(""), W(""), W(""), W(""), 
-  };
-  // the patch offered in issue #290 does not seem to work
-  setup_jumplist(jump_list_title, jump_list_cmd);
-#endif
-
-#if CYGWIN_VERSION_DLL_MAJOR >= 1007
-  // initial patch (issue #471) contributed by Johannes Schindelin
-  wchar * app_id = (wchar *) cfg.app_id;
-  wchar * relaunch_icon = (wchar *) cfg.icon;
-  wchar * relaunch_display_name = (wchar *) cfg.app_name;
-  wchar * relaunch_command = (wchar *) cfg.app_launch_cmd;
-
-#define dont_debug_properties
-
-#ifdef two_witty_ideas_with_bad_side_effects
-#warning automatic derivation of an AppId is likely not a good idea
-  // If an icon is configured but no app_id, we can derive one from the 
-  // icon in order to enable proper taskbar grouping by common icon.
-  // However, this has an undesirable side-effect if a shortcut is 
-  // pinned (presumably getting some implicit AppID from Windows) and 
-  // instances are started from there (with a different AppID...).
-  // Disabled.
-  if (relaunch_icon && *relaunch_icon && (!app_id || !*app_id)) {
-    const char * iconbasename = strrchr(cfg.icon, '/');
-    if (iconbasename)
-      iconbasename ++;
-    else {
-      iconbasename = strrchr(cfg.icon, '\\');
-      if (iconbasename)
-        iconbasename ++;
-      else
-        iconbasename = cfg.icon;
-    }
-    char * derived_app_id = malloc(strlen(iconbasename) + 7 + 1);
-    strcpy(derived_app_id, "Mintty.");
-    strcat(derived_app_id, iconbasename);
-    app_id = derived_app_id;
-  }
-  // If app_name is configured but no app_launch_cmd, we need an app_id 
-  // to make app_name effective as taskbar title, so invent one.
-  if (relaunch_display_name && *relaunch_display_name && 
-      (!app_id || !*app_id)) {
-    app_id = "Mintty.AppID";
-  }
-#endif
-
-  // Set the app ID explicitly, as well as the relaunch command and display name
-  if (prevent_pinning || (app_id && *app_id)) {
-    HMODULE shell = load_sys_library("shell32.dll");
-    HRESULT (WINAPI *pGetPropertyStore)(HWND hwnd, REFIID riid, void **ppv) =
-      (void *)GetProcAddress(shell, "SHGetPropertyStoreForWindow");
-#ifdef debug_properties
-      printf("SHGetPropertyStoreForWindow linked %d\n", !!pGetPropertyStore);
-#endif
-    if (pGetPropertyStore) {
-      IPropertyStore *pps;
-      HRESULT hr;
-      PROPVARIANT var;
-
-      hr = pGetPropertyStore(wnd, &IID_IPropertyStore, (void **) &pps);
-#ifdef debug_properties
-      printf("IPropertyStore found %d\n", SUCCEEDED(hr));
-#endif
-      if (SUCCEEDED(hr)) {
-        // doc: https://msdn.microsoft.com/en-us/library/windows/desktop/dd378459%28v=vs.85%29.aspx
-        // def: typedef struct tagPROPVARIANT PROPVARIANT: propidl.h
-        // def: enum VARENUM (VT_*): wtypes.h
-        // def: PKEY_*: propkey.h
-        if (relaunch_command && *relaunch_command && store_taskbar_properties) {
-#ifdef debug_properties
-          printf("AppUserModel_RelaunchCommand=%ls\n", relaunch_command);
-#endif
-          var.pwszVal = relaunch_command;
-          var.vt = VT_LPWSTR;
-          pps->lpVtbl->SetValue(pps,
-              &PKEY_AppUserModel_RelaunchCommand, &var);
-        }
-        if (relaunch_display_name && *relaunch_display_name) {
-#ifdef debug_properties
-          printf("AppUserModel_RelaunchDisplayNameResource=%ls\n", relaunch_display_name);
-#endif
-          var.pwszVal = relaunch_display_name;
-          var.vt = VT_LPWSTR;
-          pps->lpVtbl->SetValue(pps,
-              &PKEY_AppUserModel_RelaunchDisplayNameResource, &var);
-        }
-        if (relaunch_icon && *relaunch_icon) {
-#ifdef debug_properties
-          printf("AppUserModel_RelaunchIconResource=%ls\n", relaunch_icon);
-#endif
-          var.pwszVal = relaunch_icon;
-          var.vt = VT_LPWSTR;
-          pps->lpVtbl->SetValue(pps,
-              &PKEY_AppUserModel_RelaunchIconResource, &var);
-        }
-        if (prevent_pinning) {
-          var.boolVal = VARIANT_TRUE;
-#ifdef debug_properties
-          printf("AppUserModel_PreventPinning=%d\n", var.boolVal);
-#endif
-          var.vt = VT_BOOL;
-          // PreventPinning must be set before setting ID
-          pps->lpVtbl->SetValue(pps,
-              &PKEY_AppUserModel_PreventPinning, &var);
-        }
-#ifdef set_userpinned
-DEFINE_PROPERTYKEY(PKEY_AppUserModel_StartPinOption, 0x9f4c2855,0x9f79,0x4B39,0xa8,0xd0,0xe1,0xd4,0x2d,0xe1,0xd5,0xf3,12);
-#define APPUSERMODEL_STARTPINOPTION_USERPINNED 2
-#warning needs Windows 8/10 to build...
-        {
-          var.uintVal = APPUSERMODEL_STARTPINOPTION_USERPINNED;
-#ifdef debug_properties
-          printf("AppUserModel_StartPinOption=%d\n", var.uintVal);
-#endif
-          var.vt = VT_UINT;
-          pps->lpVtbl->SetValue(pps,
-              &PKEY_AppUserModel_StartPinOption, &var);
-        }
-#endif
-        if (app_id && *app_id) {
-#ifdef debug_properties
-          printf("AppUserModel_ID=%ls\n", app_id);
-#endif
-          var.pwszVal = app_id;
-          var.vt = VT_LPWSTR;  // VT_EMPTY should remove but has no effect
-          pps->lpVtbl->SetValue(pps,
-              &PKEY_AppUserModel_ID, &var);
-        }
-
-        pps->lpVtbl->Commit(pps);
-        pps->lpVtbl->Release(pps);
-      }
-    }
-  }
-#endif
-}
-
 
 #if CYGWIN_VERSION_API_MINOR >= 74
 
@@ -2817,6 +2720,259 @@ select_WSL(char * wsl)
 }
 
 #endif
+
+
+typedef void (* CMDENUMPROC)(wstring label, wstring cmd, wstring icon, int icon_index);
+
+static wstring * jumplist_title = 0;
+static wstring * jumplist_cmd = 0;
+static wstring * jumplist_icon = 0;
+static int * jumplist_ii = 0;
+static int jumplist_len = 0;
+
+static void
+cmd_enum(wstring label, wstring cmd, wstring icon, int icon_index)
+{
+  jumplist_title = renewn(jumplist_title, jumplist_len + 1);
+  jumplist_cmd = renewn(jumplist_cmd, jumplist_len + 1);
+  jumplist_icon = renewn(jumplist_icon, jumplist_len + 1);
+  jumplist_ii = renewn(jumplist_ii, jumplist_len + 1);
+
+  jumplist_title[jumplist_len] = label;
+  jumplist_cmd[jumplist_len] = cmd;
+  jumplist_icon[jumplist_len] = icon;
+  jumplist_ii[jumplist_len] = icon_index;
+  jumplist_len++;
+}
+
+wstring 
+wslicon(wchar * params)
+{
+  wstring icon = 0;  // default: no icon
+#if CYGWIN_VERSION_API_MINOR >= 74
+  wchar * wsl = wcsstr(params, W("--WSL"));
+  if (wsl) {
+    wsl += 5;
+    if (*wsl == '=')
+      wsl++;
+    else if (*wsl <= ' ')
+      ; // SP or NUL: no WSL distro specified
+    else
+      wsl = 0;
+  }
+  if (wsl) {
+    wchar * sp = wcsstr(wsl, W(" "));
+    int len;
+    if (sp)
+      len = sp - wsl;
+    else
+      len = wcslen(wsl);
+    if (len) {
+      wchar * wslname = newn(wchar, len + 1);
+      wcsncpy(wslname, wsl, len);
+      wslname[len] = 0;
+      char * guid;
+      wstring basepath;
+      int err = getlxssinfo(wslname, &guid, &basepath, &icon);
+      free(wslname);
+      if (!err) {
+        delete(basepath);
+        free(guid);
+      }
+    }
+    if (!icon) {  // no WSL distro specified or failed to find icon
+      char * wslico = get_resource_file(W("icon"), W("wsl.ico"), false);
+      if (wslico) {
+        icon = path_posix_to_win_w(wslico);
+        free(wslico);
+      }
+      else {
+        char * lappdata = getenv("LOCALAPPDATA");
+        if (lappdata && *lappdata) {
+          wslico = asform("%s/wsltty/wsl.ico", lappdata);
+          icon = cs__mbstowcs(wslico);
+          free(wslico);
+        }
+      }
+    }
+  }
+#else
+  (void)params;
+#endif
+  return icon;
+}
+
+static void
+enum_commands(wstring commands, CMDENUMPROC cmdenum)
+{
+  char * cmds = cs__wcstoutf(commands);
+  char * cmdp = cmds;
+  char sepch = ';';
+  if ((uchar)*cmdp <= (uchar)' ')
+    sepch = *cmdp++;
+
+  char * paramp;
+  while ((paramp = strchr(cmdp, ':'))) {
+    *paramp = '\0';
+    paramp++;
+    char * sepp = strchr(paramp, sepch);
+    if (sepp)
+      *sepp = '\0';
+
+    wchar * params = cs__utftowcs(paramp);
+    wstring icon = wslicon(params);  // default: 0 (no icon)
+    //printf("	task <%s> args <%ls> icon <%ls>\n", cmdp, params, icon);
+    cmdenum(_W(cmdp), params, icon, 0);
+
+    if (sepp)
+      cmdp = sepp + 1;
+    else
+      break;
+  }
+  free(cmds);
+}
+
+#include "jumplist.h"
+
+static void
+configure_taskbar(void)
+{
+  if (*cfg.task_commands) {
+    enum_commands(cfg.task_commands, cmd_enum);
+    setup_jumplist(cfg.app_id, jumplist_len, jumplist_title, jumplist_cmd, jumplist_icon, jumplist_ii);
+  }
+
+#if CYGWIN_VERSION_DLL_MAJOR >= 1007
+  // initial patch (issue #471) contributed by Johannes Schindelin
+  wchar * app_id = (wchar *) cfg.app_id;
+  wchar * relaunch_icon = (wchar *) cfg.icon;
+  wchar * relaunch_display_name = (wchar *) cfg.app_name;
+  wchar * relaunch_command = (wchar *) cfg.app_launch_cmd;
+
+#define dont_debug_properties
+
+#ifdef two_witty_ideas_with_bad_side_effects
+#warning automatic derivation of an AppId is likely not a good idea
+  // If an icon is configured but no app_id, we can derive one from the 
+  // icon in order to enable proper taskbar grouping by common icon.
+  // However, this has an undesirable side-effect if a shortcut is 
+  // pinned (presumably getting some implicit AppID from Windows) and 
+  // instances are started from there (with a different AppID...).
+  // Disabled.
+  if (relaunch_icon && *relaunch_icon && (!app_id || !*app_id)) {
+    const char * iconbasename = strrchr(cfg.icon, '/');
+    if (iconbasename)
+      iconbasename ++;
+    else {
+      iconbasename = strrchr(cfg.icon, '\\');
+      if (iconbasename)
+        iconbasename ++;
+      else
+        iconbasename = cfg.icon;
+    }
+    char * derived_app_id = malloc(strlen(iconbasename) + 7 + 1);
+    strcpy(derived_app_id, "Mintty.");
+    strcat(derived_app_id, iconbasename);
+    app_id = derived_app_id;
+  }
+  // If app_name is configured but no app_launch_cmd, we need an app_id 
+  // to make app_name effective as taskbar title, so invent one.
+  if (relaunch_display_name && *relaunch_display_name && 
+      (!app_id || !*app_id)) {
+    app_id = "Mintty.AppID";
+  }
+#endif
+
+  // Set the app ID explicitly, as well as the relaunch command and display name
+  if (prevent_pinning || (app_id && *app_id)) {
+    HMODULE shell = load_sys_library("shell32.dll");
+    HRESULT (WINAPI *pGetPropertyStore)(HWND hwnd, REFIID riid, void **ppv) =
+      (void *)GetProcAddress(shell, "SHGetPropertyStoreForWindow");
+#ifdef debug_properties
+      printf("SHGetPropertyStoreForWindow linked %d\n", !!pGetPropertyStore);
+#endif
+    if (pGetPropertyStore) {
+      IPropertyStore *pps;
+      HRESULT hr;
+      PROPVARIANT var;
+
+      hr = pGetPropertyStore(wnd, &IID_IPropertyStore, (void **) &pps);
+#ifdef debug_properties
+      printf("IPropertyStore found %d\n", SUCCEEDED(hr));
+#endif
+      if (SUCCEEDED(hr)) {
+        // doc: https://msdn.microsoft.com/en-us/library/windows/desktop/dd378459%28v=vs.85%29.aspx
+        // def: typedef struct tagPROPVARIANT PROPVARIANT: propidl.h
+        // def: enum VARENUM (VT_*): wtypes.h
+        // def: PKEY_*: propkey.h
+        if (relaunch_command && *relaunch_command && store_taskbar_properties) {
+#ifdef debug_properties
+          printf("AppUserModel_RelaunchCommand=%ls\n", relaunch_command);
+#endif
+          var.pwszVal = relaunch_command;
+          var.vt = VT_LPWSTR;
+          pps->lpVtbl->SetValue(pps,
+              &PKEY_AppUserModel_RelaunchCommand, &var);
+        }
+        if (relaunch_display_name && *relaunch_display_name) {
+#ifdef debug_properties
+          printf("AppUserModel_RelaunchDisplayNameResource=%ls\n", relaunch_display_name);
+#endif
+          var.pwszVal = relaunch_display_name;
+          var.vt = VT_LPWSTR;
+          pps->lpVtbl->SetValue(pps,
+              &PKEY_AppUserModel_RelaunchDisplayNameResource, &var);
+        }
+        if (relaunch_icon && *relaunch_icon) {
+#ifdef debug_properties
+          printf("AppUserModel_RelaunchIconResource=%ls\n", relaunch_icon);
+#endif
+          var.pwszVal = relaunch_icon;
+          var.vt = VT_LPWSTR;
+          pps->lpVtbl->SetValue(pps,
+              &PKEY_AppUserModel_RelaunchIconResource, &var);
+        }
+        if (prevent_pinning) {
+          var.boolVal = VARIANT_TRUE;
+#ifdef debug_properties
+          printf("AppUserModel_PreventPinning=%d\n", var.boolVal);
+#endif
+          var.vt = VT_BOOL;
+          // PreventPinning must be set before setting ID
+          pps->lpVtbl->SetValue(pps,
+              &PKEY_AppUserModel_PreventPinning, &var);
+        }
+#ifdef set_userpinned
+DEFINE_PROPERTYKEY(PKEY_AppUserModel_StartPinOption, 0x9f4c2855,0x9f79,0x4B39,0xa8,0xd0,0xe1,0xd4,0x2d,0xe1,0xd5,0xf3,12);
+#define APPUSERMODEL_STARTPINOPTION_USERPINNED 2
+#warning needs Windows 8/10 to build...
+        {
+          var.uintVal = APPUSERMODEL_STARTPINOPTION_USERPINNED;
+#ifdef debug_properties
+          printf("AppUserModel_StartPinOption=%d\n", var.uintVal);
+#endif
+          var.vt = VT_UINT;
+          pps->lpVtbl->SetValue(pps,
+              &PKEY_AppUserModel_StartPinOption, &var);
+        }
+#endif
+        if (app_id && *app_id) {
+#ifdef debug_properties
+          printf("AppUserModel_ID=%ls\n", app_id);
+#endif
+          var.pwszVal = app_id;
+          var.vt = VT_LPWSTR;  // VT_EMPTY should remove but has no effect
+          pps->lpVtbl->SetValue(pps,
+              &PKEY_AppUserModel_ID, &var);
+        }
+
+        pps->lpVtbl->Commit(pps);
+        pps->lpVtbl->Release(pps);
+      }
+    }
+  }
+#endif
+}
 
 
 #define usage __("Usage:")
@@ -3232,13 +3388,23 @@ main(int argc, char *argv[])
     load_theme(cfg.theme_file);
 
 #if CYGWIN_VERSION_DLL_MAJOR >= 1005
-  if (!wdpresent) {
-    if (support_wsl) {
-      chdir(getenv("LOCALAPPDATA"));
-      chdir("Temp");
+  if (!wdpresent) {  // shortcut start directory is empty
+    WCHAR cd[MAX_PATH + 1];
+    WCHAR wd[MAX_PATH + 1];
+    GetCurrentDirectoryW(MAX_PATH, cd);		// C:\WINDOWS\System32 ?
+    GetSystemDirectoryW(wd, MAX_PATH);		// C:\WINDOWS\system32
+    //GetSystemWindowsDirectoryW(wd, MAX_PATH);	// C:\WINDOWS
+    int l = wcslen(wd);
+    if (0 == wcsncasecmp(cd, wd, l)) {
+      // current directory is within Windows system directory
+      // and shortcut start directory is empty
+      if (support_wsl) {
+        chdir(getenv("LOCALAPPDATA"));
+        chdir("Temp");
+      }
+      else
+        chdir(home);
     }
-    else
-      chdir(home);
   }
 #endif
 
@@ -3642,6 +3808,22 @@ main(int argc, char *argv[])
         if (maxwidth || maxheight) {
           // changed terminal size not yet recorded, 
           // but window size hopefully adjusted already
+          if (border_style) {
+            // workaround for caption-less window exceeding borders (#733)
+            RECT wr;
+            GetWindowRect(wnd, &wr);
+            int w = wr.right - wr.left;
+            int h = wr.bottom - wr.top;
+            MONITORINFO mi;
+            get_my_monitor_info(&mi);
+            RECT ar = mi.rcWork;
+            if (maxwidth && ar.right - ar.left < w)
+              w = ar.right - ar.left;
+            if (maxheight && ar.bottom - ar.top < h)
+              h = ar.bottom - ar.top;
+            SetWindowPos(wnd, null, 0, 0, w, h,
+                         SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOMOVE | SWP_NOZORDER);
+          }
         }
         else {
           win_set_chars(cfg.rows, cfg.cols);
@@ -3753,15 +3935,19 @@ main(int argc, char *argv[])
 #endif
   }
 
+  // Determine how to show the window.
+  go_fullscr_on_max = (cfg.window == -1);
+  default_size_token = true;  // prevent font zooming (#708)
+  int show_cmd = go_fullscr_on_max ? SW_SHOWMAXIMIZED : cfg.window;
+  show_cmd = win_fix_taskbar_max(show_cmd);
+
   // Create child process.
   child_create(
     argv, &(struct winsize){term_rows, term_cols, term_width, term_height}
   );
 
-  // Finally show the window!
-  go_fullscr_on_max = (cfg.window == -1);
-  default_size_token = true;  // prevent font zooming (#708)
-  ShowWindow(wnd, go_fullscr_on_max ? SW_SHOWMAXIMIZED : cfg.window);
+  // Finally show the window.
+  ShowWindow(wnd, show_cmd);
   SetFocus(wnd);
 
   win_synctabs(4);
