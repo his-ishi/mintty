@@ -147,9 +147,9 @@ static void
 add_switcher(HMENU menu, bool vsep, bool hsep, bool use_win_icons)
 {
   uint bar = vsep ? MF_MENUBARBREAK : 0;
-  //__ Context menu, session switcher ("virtual tabs")
   if (hsep)
     AppendMenuW(menu, MF_SEPARATOR, 0, 0);
+  //__ Context menu, session switcher ("virtual tabs")
   AppendMenuW(menu, MF_DISABLED | bar, 0, _W("Session switcher"));
   AppendMenuW(menu, MF_SEPARATOR, 0, 0);
   int tabi = 0;
@@ -248,9 +248,9 @@ add_launcher(HMENU menu, bool vsep, bool hsep)
 {
   if (*cfg.session_commands) {
     uint bar = vsep ? MF_MENUBARBREAK : 0;
-    //__ Context menu, session launcher ("virtual tabs")
     if (hsep)
       AppendMenuW(menu, MF_SEPARATOR, 0, 0);
+    //__ Context menu, session launcher ("virtual tabs")
     AppendMenuW(menu, MF_DISABLED | bar, 0, _W("Session launcher"));
     AppendMenuW(menu, MF_SEPARATOR, 0, 0);
     append_commands(menu, cfg.session_commands, IDM_SESSIONCOMMAND, true);
@@ -482,8 +482,26 @@ win_update_menus(void)
   modify_menu(sysmenu, IDM_OPTIONS, 0, _W("&Options..."), null);
 }
 
+static bool
+add_user_commands(HMENU menu, bool vsep, bool hsep)
+{
+  if (*cfg.user_commands) {
+    uint bar = vsep ? MF_MENUBARBREAK : 0;
+    if (hsep)
+      AppendMenuW(menu, MF_SEPARATOR, 0, 0);
+    //__ Context menu, user commands
+    AppendMenuW(menu, MF_DISABLED | bar, 0, _W("User commands"));
+    AppendMenuW(menu, MF_SEPARATOR, 0, 0);
+
+    append_commands(menu, cfg.user_commands, IDM_USERCOMMAND, false);
+    return true;
+  }
+  else
+    return false;
+}
+
 static void
-win_init_ctxmenu(bool extended_menu)
+win_init_ctxmenu(bool extended_menu, bool user_commands)
 {
 #ifdef debug_modify_menu
   printf("win_init_ctxmenu\n");
@@ -520,7 +538,7 @@ win_init_ctxmenu(bool extended_menu)
     AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
   }
 
-  if (extended_menu && *cfg.user_commands) {
+  if (user_commands && *cfg.user_commands) {
     append_commands(ctxmenu, cfg.user_commands, IDM_USERCOMMAND, false);
     AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
   }
@@ -569,6 +587,7 @@ open_popup_menu(bool use_text_cursor, string menucfg, mod_keys mods)
 
   bool vsep = false;
   bool hsep = false;
+  bool init = false;
   bool wicons = strchr(menucfg, 'W');
   while (*menucfg) {
     if (*menucfg == '|')
@@ -577,9 +596,19 @@ open_popup_menu(bool use_text_cursor, string menucfg, mod_keys mods)
       // suppress duplicates except separators
       bool ok = true;
       switch (*menucfg) {
-        when 'b': if (!strchr(menucfg, 'e'))
-                    win_init_ctxmenu(false);
-        when 'e': win_init_ctxmenu(true);
+        when 'b': if (!init) {
+                    win_init_ctxmenu(false, false);
+                    init = true;
+                  }
+        when 'x': if (!init) {
+                    win_init_ctxmenu(true, false);
+                    init = true;
+                  }
+        when 'e': if (!init) {
+                    win_init_ctxmenu(true, true);
+                    init = true;
+                  }
+        when 'u': ok = add_user_commands(ctxmenu, vsep, hsep & !vsep);
         when 'W': wicons = true;
         when 's': add_switcher(ctxmenu, vsep, hsep & !vsep, wicons);
         when 'l': ok = add_launcher(ctxmenu, vsep, hsep & !vsep);
@@ -700,6 +729,11 @@ static pos last_pos = {-1, -1};
 static int button_state = 0;
 
 bool click_focus_token = false;
+static mouse_button last_button = -1;
+static mod_keys last_mods;
+static pos last_click_pos;
+static bool last_skipped = false;
+static bool mouse_state = false;
 
 static pos
 get_mouse_pos(LPARAM lp)
@@ -711,13 +745,11 @@ get_mouse_pos(LPARAM lp)
 void
 win_mouse_click(mouse_button b, LPARAM lp)
 {
+  mouse_state = true;
   bool click_focus = click_focus_token;
   click_focus_token = false;
 
-  static mouse_button last_button;
   static uint last_time, count;
-  static pos last_click_pos;
-  static bool last_skipped = false;
 
   win_show_mouse();
   mod_keys mods = get_mods();
@@ -749,6 +781,7 @@ win_mouse_click(mouse_button b, LPARAM lp)
   last_click_pos = p;
   last_time = t;
   last_button = b;
+  last_mods = mods;
 
   if (alt_state > ALT_NONE)
     alt_state = ALT_CANCELLED;
@@ -768,6 +801,7 @@ win_mouse_click(mouse_button b, LPARAM lp)
 void
 win_mouse_release(mouse_button b, LPARAM lp)
 {
+  mouse_state = false;
   term_mouse_release(b, get_mods(), get_mouse_pos(lp));
   ReleaseCapture();
   switch (b) {
@@ -794,6 +828,13 @@ win_mouse_move(bool nc, LPARAM lp)
   pos p = get_mouse_pos(lp);
   if (nc || (p.x == last_pos.x && p.y == last_pos.y))
     return;
+  if (last_skipped && last_button == MBT_LEFT && mouse_state
+      && abs(p.x - last_click_pos.x) + abs(p.y - last_click_pos.y) > 1
+     )
+  {
+    // allow focus-selection if sufficient distance spanned
+    term_mouse_click(last_button, last_mods, last_click_pos, 1);
+  }
 
   last_pos = p;
   term_mouse_move(get_mods(), p);

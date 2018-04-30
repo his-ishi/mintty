@@ -1,3 +1,41 @@
+### 2.8.5 (14 Apr 2018) ###
+
+Character handling and rendering
+  * CJK brackets are expanded if needed to ensure their symmetry (#756).
+  * Support of emoji style text attribute SGR 51/52 (mintty/wsltty#82, #600).
+  * Fixed emoji display variation selector handling.
+  * Character Info displays emoji sequence short names (mintty/wsltty#82, #600).
+  * Reverted Sixel colour registers patch that could fail Sixel display or even stall mintty window (#740, mintty/wsltty#90).
+
+Input
+  * Reenabled Ctrl+key escape sequences (#743).
+  * Input optionally keeps selection highlighting (ClearSelectionOnInput=false) (#222).
+
+Mouse handling
+  * Reenabled drag-and-drop text selection on focussing at a threshhold (~#717).
+
+Configuration
+  * Alt+F2 and mintty --dir=... stay in selected dir even in login mode (#500, #744).
+  * Fixed option --dir=...
+  * Context menu configuration (MenuMenu etc): new flags 'x' and 'u' (#755).
+  * More layout-tolerant colour value syntax (#758).
+  * Invocation as wsl*[-distro].exe implies a --WSL[=distro] parameter (mintty/wsltty#63).
+  * Added missing option `mintheme --list`.
+  * New mintheme options --file (#762) and --query.
+  * New option ClearSelectionOnInput=false disables selection highlight clearing on input (#222).
+
+Window handling
+  * Clear selection when clipboard content updated (#742).
+  * Skip refresh after colour setting if nothing changed (e.g. by prompt).
+
+Desktop integration
+  * WSL mount point configuration (/etc/wsl.conf or fstab) is considered in path conversion for open/paste (mintty/wsltty#91).
+  * Workaround for ConEmu WM_MOUSEACTIVATE bug (#724).
+
+Documentation
+  * Terminal multiplexer configuration: added tmux (#757).
+  * Search bar: activated also from context menu (#753).
+
 ### 2.8.4 (10 Feb 2018) ###
 
 Character handling and rendering
@@ -19,7 +57,7 @@ Desktop integration
   * Session launcher icons (#699).
 
 Configuration
-  * Options Emojis, EmojiPlacement to configure emojis style and display
+  * Options Emojis, EmojiPlacement to configure emojis style and display.
   * Option TaskCommands to configure a taskbar icon task list ("jump list").
   * Limit tweaking of empty shortcut start dir to Start menu case (#737).
 

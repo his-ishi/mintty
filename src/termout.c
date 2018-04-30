@@ -175,7 +175,7 @@ write_backspace(void)
   int term_top = curs->origin ? term.marg_top : 0;
   if (curs->x == 0 && (curs->y == term_top || !curs->autowrap
                        || (!cfg.old_wrapmodes && !curs->rev_wrap)))
-   /* do nothing */ ;
+    /* skip */;
   else if (curs->x == 0 && curs->y > term_top)
     curs->x = term.cols - 1, curs->y--;
   else if (curs->wrapnext) {
@@ -461,8 +461,8 @@ do_esc(uchar c)
         when 'E':  nrc_select = CSET_NO;
         when '6':  nrc_select = CSET_NO;
         when 'H':  nrc_select = CSET_SE;
-        when 'f':  nrc_select = CSET_FR;  // not documented for DEC VT510
-        when '9':  nrc_select = CSET_CA;  // not documented for DEC VT320
+        when 'f':  nrc_select = CSET_FR;  // xterm, Kermit; not DEC
+        when '9':  nrc_select = CSET_CA;  // xterm, DEC VT510; not VT320
         otherwise: nrc_select = c;
       }
     }
@@ -670,6 +670,10 @@ do_sgr(void)
       when 30 ... 37: /* foreground */
         attr.attr &= ~ATTR_FGMASK;
         attr.attr |= (term.csi_argv[i] - 30 + ANSI0) << ATTR_FGSHIFT;
+      when 51 or 52: /* "framed" or "encircled" */
+        attr.attr |= ATTR_FRAMED;
+      when 54: /* not framed, not encircled */
+        attr.attr &= ~ATTR_FRAMED;
       when 53: attr.attr |= ATTR_OVERL;
       when 55: attr.attr &= ~ATTR_OVERL;
       when 90 ... 97: /* bright foreground */
@@ -779,6 +783,7 @@ set_modes(bool state)
           win_update_mouse();
         when 25: /* DECTCEM: enable/disable cursor */
           term.cursor_on = state;
+          // Should we set term.cursor_invalid or call term_invalidate ?
         when 40: /* Allow/disallow DECCOLM (xterm c132 resource) */
           term.deccolm_allowed = state;
         when 42: /* DECNRCM: national replacement character sets */
@@ -1492,17 +1497,31 @@ do_dcs(void)
   int x0, y0;
   int attr0;
   int left, top, width, height, pixelwidth, pixelheight;
-  sixel_state_t *st;
+  sixel_state_t *st = 0;
 
   switch (term.dcs_cmd) {
   when 'q':
 
     st = (sixel_state_t *)term.imgs.parser_state;
 
+// Revert https://github.com/mintty/mintty/commit/fe48cdc
+// "fixed SIXEL colour registers handling"
+// which led to Sixel display silently failing 
+// or even stalling mintty window (#740)
+#define fixsix
+
+#ifndef fixsix
+#warning Sixel display bug #740 reenabled
+#endif
+
     switch (term.state) {
     when DCS_PASSTHROUGH:
       if (!st)
         return;
+#ifdef fixsix
+      if (!st->image.data)
+        return;
+#endif
       status = sixel_parser_parse(st, (unsigned char *)s, term.cmd_len);
       if (status < 0) {
         sixel_parser_deinit(st);
@@ -1515,6 +1534,10 @@ do_dcs(void)
     when DCS_ESCAPE:
       if (!st)
         return;
+#ifdef fixsix
+      if (!st->image.data)
+        return;
+#endif
       status = sixel_parser_parse(st, (unsigned char *)s, term.cmd_len);
       if (status < 0) {
         sixel_parser_deinit(st);
@@ -1523,11 +1546,15 @@ do_dcs(void)
         return;
       }
 
+#ifdef fixsix
+      status = sixel_parser_finalize(st);
+#else
       pixels = (unsigned char *)malloc(st->image.width * st->image.height * 4);
       if (!pixels)
         return;
 
       status = sixel_parser_finalize(st, pixels);
+#endif
       if (status < 0) {
         sixel_parser_deinit(st);
         free(term.imgs.parser_state);
@@ -1535,7 +1562,12 @@ do_dcs(void)
         return;
       }
 
+#ifdef fixsix
+      pixels = (unsigned char *)st->image.data;
+      st->image.data = NULL;
+#else
       sixel_parser_deinit(st);
+#endif
 
       left = term.curs.x;
       top = term.virtuallines + (term.sixel_display ? 0: term.curs.y);
@@ -1589,25 +1621,28 @@ do_dcs(void)
       } else {
         for (cur = term.imgs.first; cur; cur = cur->next) {
           if (cur->pixelwidth == cur->width * st->grid_width &&
-              cur->pixelheight == cur->height * st->grid_height) {
+              cur->pixelheight == cur->height * st->grid_height)
+          {
             if (img->top == cur->top && img->left == cur->left &&
                 img->width == cur->width &&
-                img->height == cur->height) {
-                memcpy(cur->pixels, img->pixels, img->pixelwidth * img->pixelheight * 4);
-                winimg_destroy(img);
-                return;
+                img->height == cur->height)
+            {
+              memcpy(cur->pixels, img->pixels, img->pixelwidth * img->pixelheight * 4);
+              winimg_destroy(img);
+              return;
             }
             if (img->top >= cur->top && img->left >= cur->left &&
                 img->left + img->width <= cur->left + cur->width &&
-                img->top + img->height <= cur->top + cur->height) {
-                for (y = 0; y < img->pixelheight; ++y)
-                  memcpy(cur->pixels +
-                           ((img->top - cur->top) * st->grid_height + y) * cur->pixelwidth * 4 +
-                           (img->left - cur->left) * st->grid_width * 4,
-                         img->pixels + y * img->pixelwidth * 4,
-                         img->pixelwidth * 4);
-                winimg_destroy(img);
-                return;
+                img->top + img->height <= cur->top + cur->height)
+            {
+              for (y = 0; y < img->pixelheight; ++y)
+                memcpy(cur->pixels +
+                         ((img->top - cur->top) * st->grid_height + y) * cur->pixelwidth * 4 +
+                         (img->left - cur->left) * st->grid_width * 4,
+                       img->pixels + y * img->pixelwidth * 4,
+                       img->pixelwidth * 4);
+              winimg_destroy(img);
+              return;
             }
           }
         }
@@ -1623,7 +1658,14 @@ do_dcs(void)
         st = term.imgs.parser_state = calloc(1, sizeof(sixel_state_t));
         sixel_parser_set_default_color(st);
       }
+#ifdef fixsix
+      status = sixel_parser_init(st,
+                                 (fg & 0xff) << 16 | (fg & 0xff00) | (fg & 0xff0000) >> 16,
+                                 (bg & 0xff) << 16 | (bg & 0xff00) | (bg & 0xff0000) >> 16,
+                                 term.private_color_registers);
+#else
       status = sixel_parser_init(st, fg, bg, term.private_color_registers);
+#endif
       if (status < 0)
         return;
     }
@@ -1632,7 +1674,7 @@ do_dcs(void)
     switch (term.state) {
     when DCS_ESCAPE:
       if (!strcmp(s, "m")) { // SGR
-        char buf[64], *p = buf;
+        char buf[72], *p = buf;
         p += sprintf(p, "\eP1$r0");
 
         if (attr.attr & ATTR_BOLD)
@@ -1655,6 +1697,8 @@ do_dcs(void)
           p += sprintf(p, ";9");
         if (attr.attr & ATTR_DOUBLYUND)
           p += sprintf(p, ";21");
+        if (attr.attr & ATTR_FRAMED)
+          p += sprintf(p, ";51;52");
         if (attr.attr & ATTR_OVERL)
           p += sprintf(p, ";53");
 
@@ -2120,7 +2164,18 @@ term_write(const char *buf, uint len)
           width = xcwidth(wc);
 #endif
 
-        wchar NRC(wchar * map) {
+        if (width == 2
+            // && wcschr(W("〈〉《》「」『』【】〒〓〔〕〖〗〘〙〚〛"), wc)
+            && wc >= 0x3008 && wc <= 0x301B && (wc | 1) != 0x3013
+            && win_char_width(wc) < 2
+            // ensure symmetric handling of matching brackets
+            && win_char_width(wc ^ 1) < 2)
+        {
+          term.curs.attr.attr |= ATTR_EXPAND;
+        }
+
+        wchar NRC(wchar * map)
+        {
           static char * rpl = "#@[\\]^_`{|}~";
           char * match = strchr(rpl, c);
           if (match)

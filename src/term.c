@@ -258,11 +258,12 @@ term_reset(bool full)
 }
 
 static void
-show_screen(bool other_screen)
+show_screen(bool other_screen, bool flip)
 {
   term.show_other_screen = other_screen;
   term.disptop = 0;
-  term.selected = false;
+  if (flip || cfg.input_clears_selection)
+    term.selected = false;
 
   // Reset cursor blinking.
   if (!other_screen) {
@@ -277,14 +278,14 @@ show_screen(bool other_screen)
 void
 term_reset_screen(void)
 {
-  show_screen(false);
+  show_screen(false, false);
 }
 
 /* Switch display to other screen and reset scrollback */
 void
 term_flip_screen(void)
 {
-  show_screen(!term.show_other_screen);
+  show_screen(!term.show_other_screen, true);
 }
 
 /* Apply changed settings */
@@ -945,6 +946,75 @@ term_check_boundary(int x, int y)
   }
 }
 
+
+#ifdef use_display_scrolling
+
+/*
+   Scroll the actual display (window contents and its cache).
+ */
+static int dispscroll_top, dispscroll_bot, dispscroll_lines = 0;
+
+static void
+disp_scroll(int topscroll, int botscroll, int scrolllines)
+{
+  if (dispscroll_lines) {
+    dispscroll_lines += scrolllines;
+    dispscroll_top = (dispscroll_top + topscroll) / 2;
+    dispscroll_bot = (dispscroll_bot + botscroll) / 2;
+  }
+  else {
+    dispscroll_top = topscroll;
+    dispscroll_bot = botscroll;
+    dispscroll_lines = scrolllines;
+  }
+}
+
+/*
+   Perform actual display scrolling.
+   Invoke window scrolling and if successful, adjust display cache.
+ */
+static void
+disp_do_scroll(int topscroll, int botscroll, int scrolllines)
+{
+  if (!win_do_scroll(topscroll, botscroll, scrolllines))
+    return;
+
+  // update display cache
+  bool down = scrolllines < 0;
+  int lines = abs(scrolllines);
+  termline * recycled[lines];
+  if (down) {
+    for (int l = 0; l < lines; l++) {
+      recycled[l] = term.displines[botscroll - 1 - l];
+      clearline(recycled[l]);
+      for (int j = 0; j < term.cols; j++)
+        recycled[l]->chars[j].attr.attr |= ATTR_INVALID;
+    }
+    for (int l = botscroll - 1; l >= topscroll + lines; l--) {
+      term.displines[l] = term.displines[l - lines];
+    }
+    for (int l = 0; l < lines; l++) {
+      term.displines[topscroll + l] = recycled[l];
+    }
+  }
+  else {
+    for (int l = 0; l < lines; l++) {
+      recycled[l] = term.displines[topscroll + l];
+      clearline(recycled[l]);
+      for (int j = 0; j < term.cols; j++)
+        recycled[l]->chars[j].attr.attr |= ATTR_INVALID;
+    }
+    for (int l = topscroll; l < botscroll - lines; l++) {
+      term.displines[l] = term.displines[l + lines];
+    }
+    for (int l = 0; l < lines; l++) {
+      term.displines[botscroll - 1 - l] = recycled[l];
+    }
+  }
+}
+
+#endif
+
 /*
  * Scroll the screen. (`lines' is +ve for scrolling forward, -ve
  * for backward.) `sb' is true if the scrolling is permitted to
@@ -953,6 +1023,10 @@ term_check_boundary(int x, int y)
 void
 term_do_scroll(int topline, int botline, int lines, bool sb)
 {
+#ifdef use_display_scrolling
+  int scrolllines = lines;
+#endif
+
   markpos_valid = false;
   assert(botline >= topline && lines != 0);
 
@@ -972,6 +1046,18 @@ term_do_scroll(int topline, int botline, int lines, bool sb)
   // Useful pointers to the top and (one below the) bottom lines.
   termline **top = term.lines + topline;
   termline **bot = term.lines + botline;
+
+#ifdef use_display_scrolling
+  // Screen scrolling
+  int topscroll = topline - term.disptop;
+  if (topscroll < term.rows) {
+    int botscroll = min(botline - term.disptop, term.rows);
+    if (!down && term.disptop && !topline)
+      ; // ignore bottom forward scroll if scrolled back
+    else
+      disp_scroll(topscroll, botscroll, scrolllines);
+  }
+#endif
 
   // Reuse lines that are being scrolled out of the scroll region,
   // clearing their content.
@@ -1160,8 +1246,9 @@ emoji_tags(int i)
 #endif
 
 struct emoji_seq {
-  void * res;  // filename (char*/wchar*) or cached image
-  echar chs[8];
+  void * res;   // filename (char*/wchar*) or cached image
+  echar chs[8]; // code points
+  char * name;  // short name in emoji-sequences.txt, emoji-zwj-sequences.txt
 };
 
 struct emoji_seq emoji_seqs[] = {
@@ -1176,6 +1263,32 @@ struct emoji {
 } __attribute__((packed));
 
 #define dont_debug_emojis 1
+
+/*
+   Get emoji sequence "short name".
+ */
+char *
+get_emoji_description(termchar * cpoi)
+{
+  //struct emoji e = (struct emoji) cpoi->attr.truefg;
+  struct emoji * ee = (void *)&cpoi->attr.truefg;
+
+  if (ee->seq) {
+    char * en = strdup("");
+    for (uint i = 0; i < lengthof(emoji_seqs->chs) && ed(emoji_seqs[ee->idx].chs[i]); i++) {
+      xchar xc = ed(emoji_seqs[ee->idx].chs[i]);
+      char ec[8];
+      sprintf(ec, "U+%04X", xc);
+      strappend(en, ec);
+      strappend(en, " ");
+    }
+    strappend(en, "| Emoji sequence: ");
+    strappend(en, emoji_seqs[ee->idx].name);
+    return en;
+  }
+  else
+    return 0;
+}
 
 /*
    Derive file name and path name from emoji sequence; store it.
@@ -1427,25 +1540,41 @@ match_emoji(termchar * d, int maxlen)
 	1	X FE0E		variation seq: strip; normal display
 	1	X FE0F		variation seq: emoji display
 	1	X [Emoji_Presentation]	emoji display
-	1	X [Extended_Pictographic]	if not in variation seq
+	1	X [Extended_Pictographic]	if not a variation (none)
        */
       if ((tags & EM_text) && combchr == 0xFE0E) {
-        // strip VARIATION SELECTOR-15, display text style
-        d->cc_next = 0;
+        // VARIATION SELECTOR-15: display text style
         emoji.len = 0;
       }
       else if ((tags & EM_emoj) && combchr == 0xFE0F) {
-        // strip VARIATION SELECTOR-16, display emoji style
-        d->cc_next = 0;
+        // VARIATION SELECTOR-16: display emoji style
       }
-      else if ((tags & EM_pres) && !combchr) {
+      else if (combchr) {
+        emoji.len = 0;  // suppress emoji style with combining
+      }
+      else if (tags & EM_pres) {
         // display presentation
       }
-      else if ((tags & EM_pict) && !(tags & (EM_text | EM_emoj)) && !combchr) {
-        // display pictographic
+      else if ((tags & (EM_emoj | EM_pres | EM_pict)) && (d->attr.attr & ATTR_FRAMED)) {
+        // with explicit attribute, display pictographic
       }
-      else
+#ifdef support_only_pictographics
+      else if ((tags & EM_pict) && !(tags & (EM_text | EM_emoj))) {
+        // we could support this group to display pictographic,
+        // however, there are no emoji graphics for them anyway, so:
         emoji.len = 0;
+      }
+#endif
+#ifdef support_other_pictographics
+      else if ((tags & EM_pict) && (tags & (EM_text | EM_emoj))) {
+        // we could support this group to display pictographic,
+        // however, Unicode specifies them for explicit variations,
+        // so let's default to text style
+        emoji.len = 0;
+      }
+#endif
+      else
+        emoji.len = 0;  // display text style
     }
     if (!emoji.len) {
       // not found another match; if we had a "longest match" before, 
@@ -1479,6 +1608,13 @@ emoji_show(int x, int y, struct emoji e, int elen, cattr eattr, ushort lattr)
 void
 term_paint(void)
 {
+#ifdef use_display_scrolling
+  if (dispscroll_lines) {
+    disp_do_scroll(dispscroll_top, dispscroll_bot, dispscroll_lines);
+    dispscroll_lines = 0;
+  }
+#endif
+
  /* The display line that the cursor is on, or -1 if the cursor is invisible. */
   int curs_y =
     term.cursor_on && !term.show_other_screen
@@ -1618,7 +1754,7 @@ term_paint(void)
           // check whether all emoji components have the same attributes
           bool equalattrs = true;
           for (int i = 1; i < e.len && equalattrs; i++) {
-#           define IGNATTR (ATTR_WIDE | ATTR_FGMASK | TATTR_COMBINING)
+# define IGNATTR (ATTR_WIDE | ATTR_FGMASK | TATTR_COMBINING)
             if ((d[i].attr.attr & ~IGNATTR) != (d->attr.attr & ~IGNATTR)
                || d[i].attr.truebg != d->attr.truebg
                )
@@ -1630,7 +1766,7 @@ term_paint(void)
 
           // modify character data to trigger later emoji display
           if (ok && equalattrs) {
-            d->attr.attr &= ~ ATTR_FGMASK;
+            d->attr.attr &= ~ATTR_FGMASK;
             d->attr.attr |= TATTR_EMOJI | e.len;
 
             //d->attr.truefg = (uint)e;
@@ -1638,10 +1774,11 @@ term_paint(void)
             uint em = *(uint *)ee;
             d->attr.truefg = em;
 
-            // refresh cashed copy
+            // refresh cached copy
             tattr = d->attr;
+            // inhibit subsequent emoji sequence components
             for (int i = 1; i < e.len; i++) {
-              d[i].attr.attr &= ~ ATTR_FGMASK;
+              d[i].attr.attr &= ~ATTR_FGMASK;
               d[i].attr.attr |= TATTR_EMOJI;
               d[i].attr.truefg = em;
             }
@@ -1734,6 +1871,10 @@ term_paint(void)
         (term.curs.wrapnext ? TATTR_RIGHTCURS : 0);
 
       if (term.cursor_invalid)
+        dispchars[curs_x].attr.attr |= ATTR_INVALID;
+
+      // try to fix #612 "cursor isn’t hidden right away"
+      if (newchars[curs_x].attr.attr != dispchars[curs_x].attr.attr)
         dispchars[curs_x].attr.attr |= ATTR_INVALID;
     }
 
@@ -1864,8 +2005,12 @@ term_paint(void)
       wchar t[len + 1]; wcsncpy(t, text, len); t[len] = 0;
       for (int i = len - 1; i >= 0 && t[i] == ' '; i--)
         t[i] = 0;
-      if (*t)
+      if (*t) {
         printf("out <%ls>\n", t);
+        for (int i = 0; i < len; i++)
+          printf(" %04X", t[i]);
+        printf("\n");
+      }
 #endif
       if (attr.attr & TATTR_EMOJI) {
         int elen = attr.attr & ATTR_FGMASK;
@@ -1928,12 +2073,19 @@ term_paint(void)
       termchar *d = chars + j;
       cattr tattr = newchars[j].attr;
       wchar tchar = newchars[j].chr;
+      // Note: newchars[j].cc_next is always 0; use chars[]
       xchar xtchar = tchar;
-      if (is_high_surrogate(tchar) && newchars[j].cc_next) {
-        termchar *t1 = &newchars[j + newchars[j].cc_next];
+#ifdef proper_non_BMP_classification
+      // this is the correct way to later check for the bidi_class,
+      // but let's not touch non-BMP here for now because:
+      // - some non-BMP ranges do not align to cell width (e.g. Hieroglyphs)
+      // - right-to-left non-BMP does not work (GetCharacterPlacementW fails)
+      if (is_high_surrogate(tchar) && chars[j].cc_next) {
+        termchar *t1 = &chars[j + chars[j].cc_next];
         if (is_low_surrogate(t1->chr))
           xtchar = combine_surrogates(tchar, t1->chr);
       }
+#endif
 
       if ((dispchars[j].attr.attr ^ tattr.attr) & ATTR_WIDE)
         dirty_line = true;
@@ -2054,17 +2206,24 @@ term_paint(void)
           wchar prev = dd->chr;
 #endif
           dd += dd->cc_next;
+
+          // mark combining unless pseudo-combining surrogates
+          if (!is_low_surrogate(dd->chr)) {
+            if (tattr.attr & TATTR_EMOJI)
+              break;
+            attr.attr |= TATTR_COMBINING;
+          }
           if (combiningdouble(dd->chr))
             attr.attr |= TATTR_COMBDOUBL;
+
           textattr[textlen] = dd->attr;
-          // hide bidi isolate mark glyphs (if handled zero-width)
-          if (dd->chr >= 0x2066 && dd->chr <= 0x2069)
+          if (cfg.emojis && dd->chr == 0xFE0E)
+            ; // skip text style variation selector
+          else if (dd->chr >= 0x2066 && dd->chr <= 0x2069)
+            // hide bidi isolate mark glyphs (if handled zero-width)
             text[textlen++] = 0x200B;  // zero width space
           else
             text[textlen++] = dd->chr;
-          // mark combining unless pseudo-combining surrogates
-          if ((dd->chr & 0xFC00) != 0xDC00)
-            attr.attr |= TATTR_COMBINING;
 #ifdef debug_surrogates
           ucschar comb = 0xFFFFF;
           if ((prev & 0xFC00) == 0xD800 && (dd->chr & 0xFC00) == 0xDC00)

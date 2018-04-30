@@ -15,6 +15,7 @@ char * mintty_debug;
 #include "winpriv.h"
 #include "winsearch.h"
 #include "winimg.h"
+#include "jumplist.h"
 
 #include "term.h"
 #include "appinfo.h"
@@ -45,6 +46,10 @@ char * mintty_debug;
 
 #ifndef INT16
 #define INT16 short
+#endif
+
+#ifndef GWL_USERDATA
+#define GWL_USERDATA -21
 #endif
 
 
@@ -78,16 +83,15 @@ static bool resizing;
 static bool disable_poschange = true;
 static int zoom_token = 0;  // for heuristic handling of Shift zoom (#467, #476)
 static bool default_size_token = false;
+bool clipboard_token = false;
 
 // Inter-window actions
 enum {
   WIN_MINIMIZE = 0,
   WIN_MAXIMIZE = -1,
   WIN_TOP = 1,
-  WIN_TITLE = 7,
+  WIN_TITLE = 4,
 };
-
-static void update_tab_titles(void);
 
 // Options
 static bool title_settable = true;
@@ -198,7 +202,9 @@ load_library_func(string lib, string func)
 bool per_monitor_dpi_aware = false;
 uint dpi = 96;
 
+#ifndef WM_DPICHANGED
 #define WM_DPICHANGED 0x02E0
+#endif
 const int Process_System_DPI_Aware = 1;
 const int Process_Per_Monitor_DPI_Aware = 2;
 static HRESULT (WINAPI * pGetProcessDpiAwareness)(HANDLE hprocess, int * value) = 0;
@@ -297,6 +303,158 @@ set_per_monitor_dpi_aware(void)
 void
 win_set_timer(void (*cb)(void), uint ticks)
 { SetTimer(wnd, (UINT_PTR)cb, ticks, null); }
+
+
+/*
+  Session management: maintain list of window titles.
+ */
+
+#define dont_debug_tabbar
+
+static struct tabinfo {
+  unsigned long tag;
+  wchar * title;
+} * tabinfo = 0;
+int ntabinfo = 0;
+
+static void
+clear_tabinfo()
+{
+  for (int i = 0; i < ntabinfo; i++) {
+    free(tabinfo[i].title);
+  }
+  if (tabinfo) {
+    free(tabinfo);
+    tabinfo = 0;
+    ntabinfo = 0;
+  }
+}
+
+static void
+add_tabinfo(unsigned long tag, wchar * title)
+{
+  struct tabinfo * newtabinfo = renewn(tabinfo, ntabinfo + 1);
+  if (newtabinfo) {
+    tabinfo = newtabinfo;
+    tabinfo[ntabinfo].tag = tag;
+    tabinfo[ntabinfo].title = wcsdup(title);
+    ntabinfo++;
+  }
+}
+
+static void
+sort_tabinfo()
+{
+  int comp_tabinfo(const void * t1, const void * t2)
+  {
+    if (((struct tabinfo *)t1)->tag < ((struct tabinfo *)t2)->tag)
+      return -1;
+    if (((struct tabinfo *)t1)->tag > ((struct tabinfo *)t2)->tag)
+      return 1;
+    else
+      return 0;
+  }
+  qsort(tabinfo, ntabinfo, sizeof(struct tabinfo), comp_tabinfo);
+}
+
+/*
+  Enumerate all windows of the mintty class.
+  ///TODO: Maintain a local list of them.
+  To be used for tab bar display.
+ */
+static void
+refresh_tab_titles(bool trace)
+{
+  BOOL CALLBACK wnd_enum_tabs(HWND curr_wnd, LPARAM lp)
+  {
+    (void)lp;
+    WINDOWINFO curr_wnd_info;
+    curr_wnd_info.cbSize = sizeof(WINDOWINFO);
+    GetWindowInfo(curr_wnd, &curr_wnd_info);
+    if (class_atom == curr_wnd_info.atomWindowType) {
+      int len = GetWindowTextLengthW(curr_wnd);
+      if (!len) {
+        // check whether already terminating
+        LONG fini = GetWindowLong(curr_wnd, GWL_USERDATA);
+        if (fini) {
+#ifdef debug_tabbar
+          printf("[%8p] get tab %8p: fini\n", wnd, curr_wnd);
+#endif
+          return true;
+        }
+      }
+      wchar title[len + 1];
+      GetWindowTextW(curr_wnd, title, len + 1);
+#ifdef debug_tabbar
+      printf("[%8p] get tab %8p: <%ls>\n", wnd, curr_wnd, title);
+#endif
+
+      static bool sort_tabs_by_time = true;
+
+      if (sort_tabs_by_time) {
+        DWORD pid;
+        GetWindowThreadProcessId(curr_wnd, &pid);
+        HANDLE ph = OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid);
+        // PROCESS_QUERY_LIMITED_INFORMATION ?
+        FILETIME cr_time, dummy;
+        if (GetProcessTimes(ph, &cr_time, &dummy, &dummy, &dummy)) {
+          unsigned long long crtime = ((unsigned long long)cr_time.dwHighDateTime << 32) | cr_time.dwLowDateTime;
+          add_tabinfo(crtime, title);
+          if (trace) {
+#ifdef debug_tabbar
+            SYSTEMTIME start_time;
+            if (FileTimeToSystemTime(&cr_time, &start_time))
+              printf("  %04d-%02d-%02d_%02d:%02d:%02d.%03d\n",
+                     start_time.wYear, start_time.wMonth, start_time.wDay,
+                     start_time.wHour, start_time.wMinute, 
+                     start_time.wSecond, start_time.wMilliseconds);
+#endif
+          }
+        }
+        CloseHandle(ph);
+      }
+      else
+        add_tabinfo((unsigned long)curr_wnd, title);
+
+    }
+    return true;
+  }
+
+  clear_tabinfo();
+  EnumWindows(wnd_enum_tabs, 0);
+  sort_tabinfo();
+}
+
+/*
+  Update list of windows in all windows of the mintty class.
+ */
+static void
+update_tab_titles()
+{
+  BOOL CALLBACK wnd_enum_tabs(HWND curr_wnd, LPARAM lp)
+  {
+    (void)lp;
+    WINDOWINFO curr_wnd_info;
+    curr_wnd_info.cbSize = sizeof(WINDOWINFO);
+    GetWindowInfo(curr_wnd, &curr_wnd_info);
+    if (class_atom == curr_wnd_info.atomWindowType) {
+      if (curr_wnd != wnd) {
+        PostMessage(curr_wnd, WM_USER, 0, WIN_TITLE);
+#ifdef debug_tabbar
+        printf("notified %8p to update tabbar\n", curr_wnd);
+#endif
+      }
+    }
+    return true;
+  }
+  if (cfg.geom_sync) {
+    // update my own list
+    refresh_tab_titles(true);
+    // tell the others to update their's
+    EnumWindows(wnd_enum_tabs, 0);
+  }
+}
+
 
 void
 win_set_title(char *title)
@@ -428,9 +586,25 @@ win_to_top(HWND top_wnd)
 
 static HWND first_wnd, last_wnd;
 
+#define dont_debug_sessions 1
+
 static BOOL CALLBACK
 wnd_enum_proc(HWND curr_wnd, LPARAM unused(lp))
 {
+#ifdef debug_sessions
+  WINDOWINFO curr_wnd_info;
+  curr_wnd_info.cbSize = sizeof(WINDOWINFO);
+  GetWindowInfo(curr_wnd, &curr_wnd_info);
+  if (class_atom == curr_wnd_info.atomWindowType) {
+    int len = GetWindowTextLengthW(curr_wnd);
+    wchar title[len + 1];
+    GetWindowTextW(curr_wnd, title, len + 1);
+    printf("[%8p.%d]%1s %2s %8p %ls\n", wnd, (int)unused_lp,
+           curr_wnd == wnd ? "=" : IsIconic(curr_wnd) ? "i" : "",
+           !first_wnd && curr_wnd != wnd && !IsIconic(curr_wnd) ? "->" : "",
+           curr_wnd, title);
+  }
+#endif
   if (curr_wnd != wnd && !IsIconic(curr_wnd)) {
     WINDOWINFO curr_wnd_info;
     curr_wnd_info.cbSize = sizeof(WINDOWINFO);
@@ -449,6 +623,13 @@ win_switch(bool back, bool alternate)
   // avoid being pushed behind other windows (#652)
   // but do it below, not here (wsltty#47)
   //SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+#if defined(debug_sessions) && debug_sessions > 1
+  first_wnd = 0, last_wnd = 0;
+  EnumChildWindows(0, wnd_enum_proc, 1);
+  first_wnd = 0, last_wnd = 0;
+  EnumDesktopWindows(0, wnd_enum_proc, 8);
+#endif
 
   first_wnd = 0, last_wnd = 0;
   EnumWindows(wnd_enum_proc, 0);
@@ -471,14 +652,9 @@ win_switch(bool back, bool alternate)
  */
 
 #define dont_debug_tabs
-#define dont_debug_tabbar
 
 static uint tabn = 0;
 static HWND * tabs = 0;
-
-#ifndef GWL_USERDATA
-#define GWL_USERDATA -21
-#endif
 
 void
 clear_tabs()
@@ -508,63 +684,6 @@ get_tab(uint tabi)
     return 0;
 }
 
-static void
-refresh_tab_titles()
-{
-  BOOL CALLBACK wnd_enum_tabs(HWND curr_wnd, LPARAM lp)
-  {
-    (void)lp;
-    WINDOWINFO curr_wnd_info;
-    curr_wnd_info.cbSize = sizeof(WINDOWINFO);
-    GetWindowInfo(curr_wnd, &curr_wnd_info);
-    if (class_atom == curr_wnd_info.atomWindowType) {
-      int len = GetWindowTextLengthW(curr_wnd);
-      if (!len) {
-        // check whether already terminating
-        LONG fini = GetWindowLong(curr_wnd, GWL_USERDATA);
-        if (fini) {
-#ifdef debug_tabbar
-          printf("[%8p] get tab %8p: fini\n", wnd, curr_wnd);
-#endif
-          return true;
-        }
-      }
-      wchar title[len + 1];
-      GetWindowTextW(curr_wnd, title, len + 1);
-#ifdef debug_tabbar
-      printf("[%8p] get tab %8p: <%ls>\n", wnd, curr_wnd, title);
-#endif
-    }
-    return true;
-  }
-  if (cfg.geom_sync)
-    EnumWindows(wnd_enum_tabs, 0);
-}
-
-static void
-update_tab_titles()
-{
-  BOOL CALLBACK wnd_enum_tabs(HWND curr_wnd, LPARAM lp)
-  {
-    (void)lp;
-    WINDOWINFO curr_wnd_info;
-    curr_wnd_info.cbSize = sizeof(WINDOWINFO);
-    GetWindowInfo(curr_wnd, &curr_wnd_info);
-    if (class_atom == curr_wnd_info.atomWindowType) {
-      if (curr_wnd != wnd) {
-        PostMessage(curr_wnd, WM_USER, 0, WIN_TITLE);
-#ifdef debug_tabbar
-        printf("notified %8p to update tabbar\n", curr_wnd);
-#endif
-      }
-    }
-    return true;
-  }
-  if (cfg.geom_sync) {
-    refresh_tab_titles();
-    EnumWindows(wnd_enum_tabs, 0);
-  }
-}
 
 static void
 win_gotab(uint n)
@@ -1790,7 +1909,7 @@ static struct {
       }
       else if (!wp && lp == WIN_TITLE) {
         if (cfg.geom_sync)
-          refresh_tab_titles();
+          refresh_tab_titles(false);
       }
       else if (cfg.geom_sync) {
 #ifdef debug_tabs
@@ -1949,6 +2068,19 @@ static struct {
       child_sendw(&(wchar){wp}, 1);
       return MNC_CLOSE << 16;
 
+#ifndef WM_CLIPBOARDUPDATE
+#define WM_CLIPBOARDUPDATE 0x031D
+#endif
+    // Try to clear selection when clipboard content is updated (#742)
+    when WM_CLIPBOARDUPDATE:
+      if (clipboard_token)
+        clipboard_token = false;
+      else {
+        term.selected = false;
+        win_update();
+      }
+      return 0;
+
 #ifdef catch_lang_change
     // this is rubbish; only the initial change would be captured anyway;
     // if (Shift-)Control-digit is mapped as a keyboard switch shortcut 
@@ -2015,14 +2147,14 @@ static struct {
     when WM_MOUSEACTIVATE:
       // prevent accidental selection on activation (#717)
       if (LOWORD(lp) == HTCLIENT && HIWORD(lp) == WM_LBUTTONDOWN)
+        if (!getenv("ConEmuPID"))
 #ifdef suppress_click_on_focus_at_message_level
 #warning this would also obstruct mouse function in the search bar
-        // ignore focus click
-        if (!getenv("ConEmuPID"))
+          // ignore focus click
           return MA_ACTIVATEANDEAT;
 #else
-        // support selective mouse click suppression
-        click_focus_token = true;
+          // support selective mouse click suppression
+          click_focus_token = true;
 #endif
 
     when WM_ACTIVATE:
@@ -2832,7 +2964,6 @@ enum_commands(wstring commands, CMDENUMPROC cmdenum)
   free(cmds);
 }
 
-#include "jumplist.h"
 
 static void
 configure_taskbar(void)
@@ -3122,6 +3253,24 @@ main(int argc, char *argv[])
 # endif
 #endif
 
+  // Options triggered via wsl*.exe
+#if CYGWIN_VERSION_API_MINOR >= 74
+  char * exename = *argv;
+  const char * exebasename = strrchr(exename, '/');
+  if (exebasename)
+    exebasename ++;
+  else
+    exebasename = exename;
+  if (0 == strncmp(exebasename, "wsl", 3)) {
+    char * exearg = strchr(exebasename, '-');
+    if (exearg)
+      exearg ++;
+    int err = select_WSL(exearg);
+    if (err)
+      option_error(__("WSL distribution '%s' not found"), exearg ?: _("(Default)"), err);
+  }
+#endif
+
   // Load config files
   // try global config file
   load_config("/etc/minttyrc", true);
@@ -3132,14 +3281,16 @@ main(int argc, char *argv[])
     load_config(rc_file, true);
     delete(rc_file);
   }
-  // try XDG config base directory default location (#525)
-  string rc_file = asform("%s/.config/mintty/config", home);
-  load_config(rc_file, true);
-  delete(rc_file);
-  // try home config file
-  rc_file = asform("%s/.minttyrc", home);
-  load_config(rc_file, 2);
-  delete(rc_file);
+  if (!support_wsl) {
+    // try XDG config base directory default location (#525)
+    string rc_file = asform("%s/.config/mintty/config", home);
+    load_config(rc_file, true);
+    delete(rc_file);
+    // try home config file
+    rc_file = asform("%s/.minttyrc", home);
+    load_config(rc_file, 2);
+    delete(rc_file);
+  }
 
   if (getenv("MINTTY_ICON")) {
     //cfg.icon = strdup(getenv("MINTTY_ICON"));
@@ -3185,18 +3336,26 @@ main(int argc, char *argv[])
       when '~':
         start_home = true;
         chdir(home);
-      when '':
-        if (chdir(optarg) < 0) {
+      when '': {
+        int res = chdir(optarg);
+        if (res == 0)
+          setenv("PWD", optarg, true);  // avoid softlink resolution
+        else {
           if (*optarg == '"' || *optarg == '\'')
             if (optarg[strlen(optarg) - 1] == optarg[0]) {
               // strip off embedding quotes as provided when started 
               // from Windows context menu by registry entry
               char * dir = strdup(&optarg[1]);
               dir[strlen(dir) - 1] = '\0';
-              chdir(dir);
+              res = chdir(dir);
+              if (res == 0)
+                setenv("PWD", optarg, true);  // avoid softlink resolution
               free(dir);
             }
         }
+        if (res == 0)
+          setenv("CHERE_INVOKING", "mintty", true);
+      }
       when '':
         if (config_dir)
           option_error(__("Duplicate option '%s'"), "configdir", 0);
@@ -3381,6 +3540,7 @@ main(int argc, char *argv[])
       }
     }
   }
+
   copy_config("main after -o", &file_cfg, &cfg);
   if (*cfg.colour_scheme)
     load_scheme(cfg.colour_scheme);
@@ -3949,6 +4109,13 @@ main(int argc, char *argv[])
   // Finally show the window.
   ShowWindow(wnd, show_cmd);
   SetFocus(wnd);
+
+  // Set up clipboard notifications.
+  HRESULT (WINAPI * pAddClipboardFormatListener)(HWND) =
+    load_library_func("user32.dll", "AddClipboardFormatListener");
+  if (pAddClipboardFormatListener) {
+    pAddClipboardFormatListener(wnd);
+  }
 
   win_synctabs(4);
   update_tab_titles();

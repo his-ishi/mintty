@@ -315,13 +315,32 @@ the application expects other key sequences than mintty sends.
 that case, the current behaviour is compatible with xterm.)
 
 
-## Using Ctrl+Tab to switch session in GNU Screen ##
+## Using Ctrl+Tab to switch window pane in terminal multiplexers ##
 
-The _Ctrl+Tab_ and _Ctrl+Shift+Tab_ key combinations can be used to switch session in **[GNU Screen](http://www.gnu.org/software/screen)**. In order to do do, their use as shortcuts for switching mintty windows needs to be disabled on the _Keys_ page of the options, and their keycodes need to be mapped in _~/.screenrc_:
+The _Ctrl+Tab_ and _Ctrl+Shift+Tab_ key combinations can be used to 
+switch windows/panes/tabs in a terminal multiplexer session.
+In order to do so, their use as shortcuts for switching mintty windows 
+needs to be disabled on the _Keys_ page of the options, 
+and their keycodes need to be mapped as shown below.
+
+### Switch window in GNU Screen ###
+
+For **[GNU Screen](http://www.gnu.org/software/screen)**, in _~/.screenrc_:
 
 ```
 bindkey "^[[1;5I" next
 bindkey "^[[1;6I" prev
+```
+
+### Switch pane in tmux ###
+
+For **[tmux](https://tmux.github.io/)**, in _~/.tmux.conf_:
+
+```
+set -s user-keys[0] "\e[1;5I"
+set -s user-keys[1] "\e[1;6I"
+bind-key -n User0 next-window
+bind-key -n User1 previous-window
 ```
 
 
@@ -587,7 +606,7 @@ Mintty supports a maximum of usual and unusual text attributes:
 | 12                     | 10                | alternative font 2            |
 | ...                    | 10                | alternative fonts 3...8       |
 | 19                     | 10                | alternative font 9            |
-| 20                     | 23, 10            | Fraktur/Blackletter font      |
+| 20                     | 23 _or_ 10        | Fraktur/Blackletter font      |
 | 21                     | 24                | doubly underline              |
 | 53                     | 55                | overline                      |
 | 30...37                | 39                | foreground ANSI colour        |
@@ -598,6 +617,7 @@ Mintty supports a maximum of usual and unusual text attributes:
 | 48;5;P                 | 49                | background palette colour     |
 | 38;2;R;G;B             | 39                | foreground true colour        |
 | 48;2;R;G;B             | 49                | background true colour        |
+| 51, 52                 | 54                | emoji style                   |
 | _any_                  | 0                 |                               |
 
 Note: The control sequences for Fraktur (“Gothic”) font are described 
@@ -620,14 +640,17 @@ background colours and inverse mode are ignored.
 
 ## Emojis ##
 
-Mintty supports display of presentation and pictographic emojis, 
-style variation selectors and emoji sequences, as defined by Unicode.
+Mintty supports display of emojis as defined by Unicode using 
+emoji presentation, emoji style variation and emoji sequences.
 
 The option `Emojis` can choose among sets of emoji graphics if 
 deployed in a mintty configuration directory.
-With this option, mintty emoji support is enabled and the emojis style is chosen. 
+With this option, mintty emoji support is enabled and the emoji graphics style is chosen. 
 Mintty will match output for valid emoji sequences, 
-emoji style selectors and pictographic or presentation forms.
+emoji style selectors and emoji presentation forms.
+
+For characters with default text style but optional emoji graphics,
+emoji style can be selected with the “framed” or “encircled” text attribute.
 
 Note that it may be useful to set `Charwidth=unicode` in addition.
 
@@ -641,6 +664,7 @@ Mintty does not bundle actual emoji graphics with its package.
 You will have to download and deploy them yourself.
 
 Emoji data can be found at the following sources:
+<img align=right src=https://github.com/mintty/mintty/wiki/mintty-emojis.png>
 * [EmojiOne](https://www.emojione.com/)
   * Free Download for your own use, PNG Files, download e.g. 128x128px zip
   * Deploy the preferred subdirectory (e.g. 128) as `emojione`
@@ -665,13 +689,26 @@ for example:
 
 “Deploy” above means move, link, copy or hard-link the respective subdirectory 
 into mintty configuration resource subdirectory `emojis`, e.g.
-* mv noto-emoji/png/128 ~/.config/mintty/emojis/noto
-* ln -s "$PWD"/noto-emoji/png/128 ~/.config/mintty/emojis/noto
-* cp -rl noto-emoji/png/128 ~/.config/mintty/emojis/noto
+* `mv noto-emoji/png/128 ~/.config/mintty/emojis/noto`
+* `ln -s "$PWD"/noto-emoji/png/128 ~/.config/mintty/emojis/noto`
+* `cp -rl noto-emoji/png/128 ~/.config/mintty/emojis/noto`
+
 Use your preferred configuration directory, e.g.
-* cp -rl noto-emoji/png/128 "$APPDATA"/mintty/emojis/noto
-* cp -rl noto-emoji/png/128 /usr/share/mintty/emojis/noto
-<img align=top src=https://github.com/mintty/mintty/wiki/mintty-emojis.png>
+* `cp -rl noto-emoji/png/128 "$APPDATA"/mintty/emojis/noto`
+* `cp -rl noto-emoji/png/128 /usr/share/mintty/emojis/noto`
+
+
+## Searching in the text and scrollback buffer ##
+
+With the `Search` menu command or Alt+F3, a search bar is opened.
+Matching is case-insensitive and ignores combining characters.
+Matches are highlighted in the scrollback buffer.
+The appearance of the search bar and the matching highlight colours can be 
+customized.
+
+Another search feature (Shift+cursor-left/right) skips to the 
+previous/next prompt line if these are marked with scroll marker escape 
+sequences, see the [[CtrlSeqs]] wiki page.
 
 
 ## Passing arguments from an environment with different character set ##
@@ -817,6 +854,7 @@ Diagnostic display of current character information can be toggled
 from the extended context menu (Ctrl+right-click).
 * _Unicode character codes_ at the current cursor position will then be displayed in the window title bar. (Note that mintty may precompose a combining character sequence into a combined character which is then displayed.)
 * _Unicode character names_ will be included in the display if the **unicode-ucd** package is installed in `/usr/share` (or the file `charnames.txt` generated by the mintty script `src/mknames` is installed in the mintty resource subfolder `info`).
+* _Emoji sequence “short names”_ will be indicated if Emojis display is enabled.
 Note that the “normal” window title setting sequence 
 and the character information output simply overwrite each other.
 

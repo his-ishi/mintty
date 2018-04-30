@@ -145,6 +145,7 @@ const config default_cfg = {
   // "Hidden"
   .bidi = 2,
   .disable_alternate_screen = false,
+  .input_clears_selection = true,
   .charwidth = 0,
   .emojis = 0,
   .emoji_placement = 0,
@@ -291,9 +292,7 @@ options[] = {
   {"AltFnShortcuts", OPT_BOOL, offcfg(alt_fn_shortcuts)},
   {"CtrlShiftShortcuts", OPT_BOOL, offcfg(ctrl_shift_shortcuts)},
   {"CtrlExchangeShift", OPT_BOOL, offcfg(ctrl_exchange_shift)},
-#ifdef support_disable_ctrl_controls_663
-  {"CtrlControls", OPT_BOOL | OPT_LEGACY, offcfg(ctrl_controls)},
-#endif
+  {"CtrlControls", OPT_BOOL, offcfg(ctrl_controls)},
   {"ComposeKey", OPT_MOD, offcfg(compose_key)},
   {"Key_PrintScreen", OPT_STRING, offcfg(key_prtscreen)},
   {"Key_Pause", OPT_STRING, offcfg(key_pause)},
@@ -361,6 +360,7 @@ options[] = {
   // "Hidden"
   {"Bidi", OPT_INT, offcfg(bidi)},
   {"NoAltScreen", OPT_BOOL, offcfg(disable_alternate_screen)},
+  {"ClearSelectionOnInput", OPT_BOOL, offcfg(input_clears_selection)},
   {"Charwidth", OPT_CHARWIDTH, offcfg(charwidth)},
   {"Emojis", OPT_EMOJIS, offcfg(emojis)},
   {"EmojiPlacement", OPT_EMOJI_PLACEMENT, offcfg(emoji_placement)},
@@ -659,18 +659,21 @@ bool
 parse_colour(string s, colour *cp)
 {
   uint r, g, b;
-  if (sscanf(s, "%u,%u,%u%c", &r, &g, &b, &(char){0}) == 3)
+  if (sscanf(s, "%u,%u,%u", &r, &g, &b) == 3)
     ;
-  else if (sscanf(s, "#%2x%2x%2x%c", &r, &g, &b, &(char){0}) == 3)
+  else if (sscanf(s, "#%2x%2x%2x", &r, &g, &b) == 3)
     ;
-  else if (sscanf(s, "rgb:%2x/%2x/%2x%c", &r, &g, &b, &(char){0}) == 3)
+  else if (sscanf(s, "rgb:%2x/%2x/%2x", &r, &g, &b) == 3)
     ;
-  else if (sscanf(s, "rgb:%4x/%4x/%4x%c", &r, &g, &b, &(char){0}) == 3)
+  else if (sscanf(s, "rgb:%4x/%4x/%4x", &r, &g, &b) == 3)
     r >>=8, g >>= 8, b >>= 8;
   else {
     int coli = -1;
+    int len = strlen(s);
+    while (len && s[len - 1] == ' ')
+      len--;
     for (uint i = 0; i < lengthof(xcolours); i++)
-      if (!strcasecmp(s, xcolours[i].name)) {
+      if (0 == strncasecmp(s, xcolours[i].name, len)) {
         r = xcolours[i].r;
         g = xcolours[i].g;
         b = xcolours[i].b;
