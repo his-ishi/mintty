@@ -74,7 +74,8 @@ in the config file, like:
 For a standalone mintty deployment as a WSL terminal, also providing 
 desktop and start menu shortcuts, command line launch scripts, and 
 optional Windows Explorer integration, install 
-[wsltty](https://github.com/mintty/wsltty).
+[wsltty](https://github.com/mintty/wsltty),
+using either the wsltty installer, a Chocolatey package, or a Windows Appx package.
 
 ### Manual setup of WSL terminal ###
 
@@ -271,7 +272,26 @@ Finally, a couple of bindings for convenient searching of the command history. J
 ```
 
 
-## Mode-dependent cursor in vim ##
+## Keyboard not working as expected in certain applications (e.g. vim) ##
+
+If for example the PgUp and PgDn keys do not work in your editor, the reason 
+may be that in the mintty Options, the Terminal Type was set to "vt100" 
+and based on the resulting setting of the environment variable TERM, 
+the application expects other key sequences than mintty sends.
+(While mintty could be changed to send VT100 application keypad codes in 
+that case, the current behaviour is compatible with xterm.)
+
+### Shift+up/down for text selection in emacs ###
+
+The escape sequences for Shift+up/down are mapped to scroll-backward/forward 
+virtual keys by the xterm terminfo entry.
+Follow the advice in 
+[How to fix emacs shift-up key...](https://stackoverflow.com/questions/18689655/how-to-fix-emacs-shift-up-key-for-text-selection-in-mintty-on-cygwin/#18689656)
+to create a fixed terminfo entry that removes this mapping,
+or use a suitable alternative setting for the environment variable TERM, 
+for example `TERM=xterm-color`.
+
+### Mode-dependent cursor in vim ###
 
 Mintty supports control sequences for changing cursor style. These can be used to configure **[vim](http://www.vim.org/)** such that the cursor changes depending on mode. For example, with the following lines in _~/.vimrc_, vim will show a block cursor in normal mode and a line cursor in insert mode:
 
@@ -282,8 +302,7 @@ let &t_EI.="\e[1 q"
 let &t_te.="\e[0 q"
 ```
 
-
-## Avoiding escape timeout issues in vim ##
+### Avoiding escape timeout issues in vim ###
 
 It’s a historical flaw of Unix terminals that the keycode of the escape key, i.e. the escape character, also appears at the start of many other keycodes. This means that on seeing an escape character, an application cannot be sure whether to treat it as an escape key press or whether to expect more characters to complete a longer keycode.
 
@@ -303,16 +322,6 @@ Note that the last line causes vi-compatible behaviour to be used when pressing 
 ```
 noremap! <Esc>O[ <C-c>
 ```
-
-
-## Keyboard not working as expected in certain applications (e.g. vim) ##
-
-If for example the PgUp and PgDn keys do not work in your editor, the reason 
-may be that in the mintty Options, the Terminal Type was set to "vt100" 
-and based on the resulting setting of the environment variable TERM, 
-the application expects other key sequences than mintty sends.
-(While mintty could be changed to send VT100 application keypad codes in 
-that case, the current behaviour is compatible with xterm.)
 
 
 ## Using Ctrl+Tab to switch window pane in terminal multiplexers ##
@@ -411,6 +420,8 @@ Different notations are accepted for colour specifications:
 * ```rrr,ggg,bbb``` (256 decimal values)
 * ```rgb:RR/GG/BB``` (256 hex values)
 * ```rgb:RRRR/GGGG/BBBB``` (65536 hex values)
+* ```cmy:C.C/M.M/Y.Y``` (float values between 0 and 1)
+* ```cmyk:C.C/M.M/Y.Y/K.K``` (float values between 0 and 1)
 * _color-name_ (using X11 color names, e.g. ```echo -ne '\e]10;bisque2\a'```)
 
 
@@ -589,14 +600,20 @@ to adjust line spacing.
 
 ## Text attributes and rendering ##
 
-Mintty supports a maximum of usual and unusual text attributes:
+Mintty supports a maximum of usual and unusual text attributes.
+For underline styles and colour values, colon-separated 
+ISO/IEC 8613-6 sub-parameters are supported.
 
 | **start `^[[...m`**    | **end `^[[...m`** | **attribute**                 |
 |:-----------------------|:------------------|:------------------------------|
 | 1                      | 22                | bold                          |
 | 2                      | 22                | dim                           |
 | 3                      | 23                | italic                        |
-| 4                      | 24                | underline                     |
+| 4 _or_ 4:1             | 24 _or_ 4:0       | solid underline               |
+| 4:2                    | 24 _or_ 4:0       | double underline              |
+| 4:3                    | 24 _or_ 4:0       | wavy underline                |
+| 4:4                    | 24 _or_ 4:0       | dotted underline              |
+| 4:5                    | 24 _or_ 4:0       | dashed underline              |
 | 5                      | 25                | blinking                      |
 | 6                      | 25                | rapidly blinking              |
 | 7                      | 27                | inverse                       |
@@ -607,17 +624,27 @@ Mintty supports a maximum of usual and unusual text attributes:
 | ...                    | 10                | alternative fonts 3...8       |
 | 19                     | 10                | alternative font 9            |
 | 20                     | 23 _or_ 10        | Fraktur/Blackletter font      |
-| 21                     | 24                | doubly underline              |
+| 21 _or_ 4:2            | 24 _or_ 4:0       | double underline              |
 | 53                     | 55                | overline                      |
 | 30...37                | 39                | foreground ANSI colour        |
 | 90...97                | 39                | foreground bright ANSI colour |
 | 40...47                | 49                | background ANSI colour        |
 | 100...107              | 49                | background bright ANSI colour |
-| 38;5;P                 | 39                | foreground palette colour     |
-| 48;5;P                 | 49                | background palette colour     |
+| 38;5;P _or_ 38:5:P     | 39                | foreground palette colour     |
+| 48;5;P _or_ 48:5:P     | 49                | background palette colour     |
 | 38;2;R;G;B             | 39                | foreground true colour        |
 | 48;2;R;G;B             | 49                | background true colour        |
-| 51, 52                 | 54                | emoji style                   |
+| 38:2::R:G:B            | 39                | foreground RGB true colour    |
+| 48:2::R:G:B            | 49                | background RGB true colour    |
+| 38:3:F:C:M:Y           | 39                | foreground CMY colour (*)     |
+| 48:3:F:C:M:Y           | 49                | background CMY colour (*)     |
+| 38:4:F:C:M:Y:K         | 39                | foreground CMYK colour (*)    |
+| 48:4:F:C:M:Y:K         | 49                | background CMYK colour (*)    |
+| 51 _or_ 52             | 54                | emoji style (*)               |
+| 58:5:P                 | 59                | underline palette colour      |
+| 58:2::R:G:B            | 59                | underline RGB colour          |
+| 58:3:F:C:M:Y           | 59                | underline CMY colour (*)      |
+| 58:4:F:C:M:Y:K         | 59                | underline CMYK colour (*)     |
 | _any_                  | 0                 |                               |
 
 Note: The control sequences for Fraktur (“Gothic”) font are described 
@@ -628,6 +655,13 @@ Note: The control sequence for alternative font 1 overrides the identical
 control sequence to select the VGA character set. Configuring alternative 
 font 1 is therefore discouraged. See the mintty manual page about how 
 to configure alternative fonts.
+
+Note: RGB colour values are scaled to a maximum of 255 (=100%).
+CMY(K) colour values are scaled to a maximum of the given parameter F (=100%).
+
+Note: The emoji style attribute sets the display preference for a number 
+of characters that have emojis but would be displayed with text style 
+by default (e.g. decimal digits).
 
 As a fancy add-on feature for text attributes, mintty supports distinct 
 colour attributes for combining characters, so a combined character 
@@ -652,7 +686,7 @@ emoji style selectors and emoji presentation forms.
 For characters with default text style but optional emoji graphics,
 emoji style can be selected with the “framed” or “encircled” text attribute.
 
-Note that it may be useful to set `Charwidth=unicode` in addition.
+Note that up to cygwin 2.10.0, it may be useful to set `Charwidth=unicode` in addition.
 
 Emojis are displayed in the rectangular character cell group determined 
 by the cumulated width of the emoji sequence characters. The option 

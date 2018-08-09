@@ -104,11 +104,9 @@ comma-separated index can be used to select a particular icon in a file with
 multiple icons.
 
 \fINote:\fP About interaction problems of icon, shortcut, and the Windows taskbar:
-In a Windows desktop shortcut, to achieve consistent icon behaviour, 
-the same icon should be specified in the shortcut properties (Change Icon...) 
-and the mintty command line (Target:),
-or (beginning 2.2.3) no icon should be specified on the command line as 
-mintty will then take the icon from the invoking shortcut, 
+In a Windows desktop shortcut, it is suggested not to use this option in the 
+Target command line, as mintty will detect and use the icon 
+from the invoking shortcut (Change Icon...), 
 also resolving a leading Windows environment variable (like %SystemRoot%).
 
 .TP
@@ -198,7 +196,7 @@ Create a utmp entry.
 
 .TP
 \fB-w\fP, \fB--window\fP \fBnormal\fP|\fBmin\fP|\fBmax\fP|\fBfull\fP|\fBhide\fP
-Set the initial window state: normal, minimised, maximised, full screen,
+Set the initial window state: normal, minimized, maximized, full screen,
 or hidden.
 
 .TP
@@ -232,7 +230,7 @@ With values "s" or "o", mintty reports the position and size of the window
 when it exits. This can be used to manage last window positions and reopen 
 mintty windows accordingly.
 Reporting mode is "s" or "o" to choose short or long option syntax for the 
-restored (i.e. neither maximised nor minimised) geometry; 
+restored (i.e. neither maximized nor minimized) geometry; 
 min/max/fullscreen information is added.
 
 With value "m", mintty reports the system's monitor configuration 
@@ -278,6 +276,11 @@ otherwise, it refers to the installed WSL packages as listed by the
 Windows tool \fBwslconfig /l\fP.
 Implies \fB--wsl -o Locale=C -o Charset=UTF-8\fP, \fB--rootfs=\fP..., 
 and \fB--icon=\fP... if a respective icon file exists for the distribution.
+
+.TP
+\fB--WSLmode\fP \fIWSL DISTRIBUTION NAME\fP
+Setup a WSL session like \fB--WSL\fP but do not actually launch wsl 
+which must be achieved with explicit setup of a suitable gateway.
 
 .TP
 \fB--rootfs\fP \fIROOTFOLDER\fP
@@ -405,6 +408,9 @@ Shell quoting is added to file names that contain spaces or special characters.
 Selection highlighting is cleared on input by default. This can be disabled
 with option \fBClearSelectionOnInput=false\fP.
 
+The current selection size can optionally been indicated with a popup, 
+enabled with option \fBSelectionShowSize\fP.
+
 .SS Drag & drop
 
 Text, files and directories can be dropped into the mintty window.
@@ -422,7 +428,18 @@ selected pathnames, also embedding quote marks are considered.
 A relative pathname is interpreted as relative to the current working 
 directory of the terminal foreground process if that can be determined, 
 overridden by the working directory interactively communicated by the 
-respective control sequence.
+respective control sequence (OSC 7).
+
+\fINote:\fP While application mouse modes are enabled (as used by many 
+screen oriented applications), \fBCtrl+Shift+click\fP can be used to 
+override it.
+
+.TP
+\fBHovering files, directories and URLs\fP
+The file names and links subject to opening are indicated by underlining 
+when mouse-hovering over them (i.e. when moving the mouse) while the 
+Control key is pressed. The colour used for hovering underlines 
+can be configured with \fBHoverColour\fP.
 
 .SS Font zoom
 
@@ -523,8 +540,9 @@ For example, this allows to refer to past commands while editing a file.
 
 .SS Switching session
 
-The \fBCtrl+Tab\fP and \fBCtrl+Shift+Tab\fP shortcuts can be used to switch
-between mintty windows.  Minimised windows are skipped.
+The \fBCtrl+Tab\fP and \fBCtrl+Shift+Tab\fP shortcuts can be used to 
+cycle through mintty windows.
+Minimized windows are skipped unless both \fBCtrl\fP keys are used.
 
 .SS Virtual Tabs
 
@@ -655,9 +673,13 @@ An overview of all the keyboard shortcuts.
 .br
 \(en \fBAlt+Space\fP: Window menu
 .br
-\(en \fBCtrl+Tab\fP: Next window
+\(en \fBCtrl+Tab\fP: Next visible window (as sorted by creation time)
 .br
-\(en \fBCtrl+Shift+Tab\fP: Previous window
+\(en \fBCtrl+Shift+Tab\fP: Previous visible window (as sorted by creation time)
+.br
+\(en \fBCtrl+Ctrl+Tab\fP: Next window (as sorted by creation time)
+.br
+\(en \fBCtrl+Ctrl+Shift+Tab\fP: Previous window (as sorted by creation time)
 .br
 \(en \fBCtrl+Alt+mouse-click/drag\fP: Move window
 
@@ -857,16 +879,19 @@ Clicking on one of the buttons here opens the colour selection dialog.
 In the settings (config file or command-line options), colours are 
 represented as comma-separated RGB triples with decimal 8-bit values 
 ranging from 0 to 255. X-style hexadecimal colour specifications such 
-as #RRGGBB, rgb:RR/GG/BB or rgb:RRRR/GGGG/BBBB can be used as well.
+as #RRGGBB, rgb:RR/GG/BB or rgb:RRRR/GGGG/BBBB, 
+cmy:C.C/M.M/Y.Y or cmyk:C.C/M.M/Y.Y/K.K can be used as well.
 Also X11 color names are supported.
 .br
-\(en \fBForeground\fP (ForegroundColour=191,191,191)
+\(en \fBForeground text colour\fP (ForegroundColour=191,191,191)
 .br
-\(en \fBBackground\fP (BackgroundColour=0,0,0)
+\(en \fBBackground colour\fP (BackgroundColour=0,0,0)
 .br
-\(en \fBCursor\fP (CursorColour=191,191,191)
+\(en \fBCursor colour\fP (CursorColour=191,191,191)
 .br
-\(en \fBUnderline, Strikeout, Overline\fP (UnderlineColour=-1)
+\(en \fBUnderline, Strikeout, Overline colour\fP (UnderlineColour=-1)
+.br
+\(en \fBCtrl+mouse-move hovering colour\fP (HoverColour=-1)
 
 \(en \fBTheme\fP (ThemeFile=): 
 The popup menu offers theme files as stored in a resource subdirectory 
@@ -1201,8 +1226,8 @@ showing the window menu and toggling full screen mode.
 
 .TP
 \fBSwitch window shortcuts\fP (SwitchShortcuts=yes)
-Checkbox for enabling the \fBCtrl+Tab\fP and \fBCtrl+Shift+Tab\fP shortcuts
-for switching between mintty windows.
+Checkbox for enabling the \fBCtrl+Tab\fP shortcuts 
+for switching between mintty windows cyclically.
 
 .TP
 \fBZoom shortcuts\fP (ZoomShortcuts=yes)
@@ -1467,6 +1492,8 @@ By default, this is empty.
 .TP
 \fBAlternate screen\fP (NoAltScreen=false)
 With this setting, the alternate screen can be disabled.
+(Corresponds to the xterm resource \fBtiteInhibit\fP, 
+switchable by an escape sequence.)
 
 .TP
 \fBApply old wraparound behaviour\fP (OldWrapModes=false)
@@ -1654,9 +1681,9 @@ This setting determines how the terminal window should be shown at startup:
 .br
 \(en \fBnormal\fP (default)
 .br
-\(en \fBmin\fP (minimised)
+\(en \fBmin\fP (minimized)
 .br
-\(en \fBmax\fP (maximised)
+\(en \fBmax\fP (maximized)
 .br
 \(en \fBfull\fP (full screen)
 .br
@@ -1683,6 +1710,11 @@ options, which means they can only be set in config files or using the
 .TP
 \fBClear selection highlighting on input\fP (ClearSelectionOnInput=true)
 When this is disabled, keyboard input or pasting does not clear selection highlighting.
+
+.TP
+\fBSelection size indication\fP (SelectionShowSize=0)
+The current selection size can optionally been indicated with a popup, 
+with a value between 1 and 12, setting the popup position by clock hour.
 
 .TP
 \fBSingle-dash long options\fP (ShortLongOpts=false)
@@ -1890,7 +1922,8 @@ These are the 16 ANSI colour settings along with their default values.
 Colours are represented as comma-separated RGB triples with decimal 8-bit values
 ranging from 0 to 255. 
 X-style hexadecimal colour specifications such as #RRGGBB, 
-rgb:RR/GG/BB or rgb:RRRR/GGGG/BBBB can be used as well. 
+rgb:RR/GG/BB or rgb:RRRR/GGGG/BBBB, 
+cmy:C.C/M.M/Y.Y or cmyk:C.C/M.M/Y.Y/K.K can be used as well.
 Also X11 color names are supported.
 .br
 \(en \fBBlack\fP=0,0,0
@@ -1958,6 +1991,21 @@ The highlighting colours of search matches can be configured.
 \(en \fBSearchCurrentColour\fP=\fIbright yellow\fP
 
 .TP
+\fBBackground image or texture\fP (Background=)
+With this option, an image can be chosen as background.
+With an image file name, absolute (with an optional \fB~\fP prefix) 
+or relative to the current terminal foreground process, 
+the option either uses the image as a background picture, scaled to 
+the terminal size (optional prefix \fB_\fP to the filename), 
+or as a tiled background texture (prefix \fB*\fP to the filename).
+The background can be changed with an OSC 11 escape sequence, using 
+a filename prefixed with either \fB_\fP or \fB*\fP instead of a colour.
+
+If the background filename is followed by a comma and a number between 1 and 254, 
+the background image will be dimmed towards the background colour;
+with a value of 255, the alpha transparency values of the image will be used.
+
+.TP
 \fBScrollback search bar\fP (SearchBar=)
 This string option can customize the order of items in the search bar.
 Use x (close button), </> (previous/next buttons), s (search string) to 
@@ -2000,11 +2048,13 @@ window zooming by the Shift key is disabled,
 except for the keyboard zoom functions Shift+Alt+Enter/F11 and the Shift+menu function.
 
 .TP
-\fBHandling of DPI changes\fP (HandleDPI=true)
+\fBHandling of DPI changes\fP (HandleDPI=1)
 By default, in Windows 10, when the window is moved to another monitor 
 that has a different DPI value ("scaling factor") configured, this is 
 considered to compensate by appropriate scaling.
-This option can be set to false to suppress DPI adjustments.
+This option can be set to 0/false to suppress DPI adjustments,
+or to 2 to require DPI handling mode 2 and only enable DPI handling if
+this recently fixed Windows DPI handling mode is available.
 
 .TP
 \fBCheck availability of mintty version update\fP (CheckVersionUpdate=900)
@@ -2143,7 +2193,15 @@ specified as an alternative separator by starting the whole setting with it.)
 
 \fINote:\fP This feature only works in combination with a parameter 
 \fB-o AppID=...\fP. If the taskbar icon is "pinned" to the taskbar, 
-the task list is retained with it.
+the task list is retained with it, initially...
+
+\fINote:\fP To make the jump list persistent, it is necessary to carefully 
+apply additional tricks to satisfy the insane taskbar configuration paradigm of Windows.
+First, also configure a default taskbar icon command using options 
+AppName and AppLaunchCmd.
+Second, choose a unique value for AppID and also add it to 
+the (default) launch command and all (jumplist) task commands.
+Third, invoke mintty with the chosen AppID and option --store-taskbar-properties.
 
 \fINote:\fP Task names are subject to localization if they are 
 added to the localization file of the selected UI localization language 
@@ -2168,9 +2226,9 @@ Examples:
 \fBMenu contents\fP
 These settings allow to customize the context menu as opened in various ways.
 .br
-\(en \fBMouse\fP (MenuMouse=b); the normal mouse-click context menu
+\(en \fBMouse\fP (MenuMouse=b); the normal mouse-right-click context menu
 .br
-\(en \fBCtrl+Mouse\fP (MenuCtrlMouse=e|ls); the Ctrl+mouse-click menu
+\(en \fBCtrl+Mouse\fP (MenuCtrlMouse=e|ls); the Ctrl+right-click menu
 .br
 \(en \fBMouse button 5\fP (MenuMouse5=ls); the mouse button 5 menu
 .br
@@ -2257,7 +2315,7 @@ Additional information can be found on the wiki on the mintty project page
 
 .SH LICENSE
 
-Copyright (C) 2013 Andy Koppe (C) 2016 Thomas Wolff
+Copyright (C) 2013 Andy Koppe (C) 2018 Thomas Wolff
 
 Mintty is released under the terms of the the \fIGNU General Public License\fP
 version 3.

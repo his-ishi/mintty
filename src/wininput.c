@@ -1,5 +1,5 @@
 // wininput.c (part of mintty)
-// Copyright 2008-12 Andy Koppe
+// Copyright 2008-12 Andy Koppe, 2015-2018 Thomas Wolff
 // Licensed under the terms of the GNU General Public License v3 or later.
 
 #include "winpriv.h"
@@ -459,6 +459,14 @@ win_update_menus(void)
     alt_fn ? W("Alt+F10") : ct_sh ? W("Ctrl+Shift+D") : null
   );
 
+  uint scrollbar_checked = term.show_scrollbar ? MF_CHECKED : MF_UNCHECKED;
+  if (!cfg.scrollbar)
+    scrollbar_checked |= MF_GRAYED;
+  //__ Context menu:
+  modify_menu(ctxmenu, IDM_SCROLLBAR, scrollbar_checked, _W("Scroll&bar"),
+    null
+  );
+
   uint fullscreen_checked = win_is_fullscreen ? MF_CHECKED : MF_UNCHECKED;
   //__ Context menu:
   modify_menu(ctxmenu, IDM_FULLSCREEN_ZOOM, fullscreen_checked, _W("&Full Screen"),
@@ -529,6 +537,7 @@ win_init_ctxmenu(bool extended_menu, bool user_commands)
   }
   AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
   AppendMenuW(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_DEFSIZE_ZOOM, 0);
+  AppendMenuW(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_SCROLLBAR, 0);
   AppendMenuW(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_FULLSCREEN_ZOOM, 0);
   AppendMenuW(ctxmenu, MF_ENABLED | MF_UNCHECKED, IDM_FLIPSCREEN, 0);
   AppendMenuW(ctxmenu, MF_SEPARATOR, 0, 0);
@@ -724,8 +733,8 @@ translate_pos(int x, int y)
   };
 }
 
+pos last_pos = {-1, -1};
 static LPARAM last_lp = -1;
-static pos last_pos = {-1, -1};
 static int button_state = 0;
 
 bool click_focus_token = false;
@@ -733,6 +742,7 @@ static mouse_button last_button = -1;
 static mod_keys last_mods;
 static pos last_click_pos;
 static bool last_skipped = false;
+static uint last_skipped_time;
 static bool mouse_state = false;
 
 static pos
@@ -764,8 +774,18 @@ win_mouse_click(mouse_button b, LPARAM lp)
 
   SetFocus(wnd);  // in case focus was in search bar
 
-  if (click_focus && b == MBT_LEFT && count == 1)
+  if (click_focus && b == MBT_LEFT && count == 1
+      && // not in application mouse mode
+         !(term.mouse_mode && term.report_focus &&
+           cfg.clicks_target_app ^ ((mods & cfg.click_target_mod) != 0)
+          )
+     ) {
+    //printf("suppressing focus-click selection\n");
+    // prevent accidental selection when focus-clicking into the window (#717)
     last_skipped = true;
+    last_skipped_time = t;
+    //printf("last_skipped_time = %d\n", t);
+  }
   else {
     if (last_skipped && b == last_button
         && p.x == last_click_pos.x && p.y == last_click_pos.y
@@ -828,12 +848,14 @@ win_mouse_move(bool nc, LPARAM lp)
   pos p = get_mouse_pos(lp);
   if (nc || (p.x == last_pos.x && p.y == last_pos.y))
     return;
-  if (last_skipped && last_button == MBT_LEFT && mouse_state
-      && abs(p.x - last_click_pos.x) + abs(p.y - last_click_pos.y) > 1
-     )
-  {
-    // allow focus-selection if sufficient distance spanned
-    term_mouse_click(last_button, last_mods, last_click_pos, 1);
+  if (last_skipped && last_button == MBT_LEFT && mouse_state) {
+    // allow focus-selection if distance spanned 
+    // is large enough or with sufficient delay (#717)
+    uint dist = sqrt(sqr(p.x - last_click_pos.x) + sqr(p.y - last_click_pos.y));
+    uint diff = GetMessageTime() - last_skipped_time;
+    //printf("focus move %d %d\n", dist, diff);
+    if (dist * diff > 999)
+      term_mouse_click(last_button, last_mods, last_click_pos, 1);
   }
 
   last_pos = p;
@@ -881,9 +903,10 @@ win_get_locator_info(int *x, int *y, int *buttons, bool by_pixels)
 static void
 toggle_scrollbar(void)
 {
-  cfg.scrollbar = !cfg.scrollbar;
-  term.show_scrollbar = cfg.scrollbar;
-  win_update_scrollbar();
+  if (cfg.scrollbar) {
+    term.show_scrollbar = !term.show_scrollbar;
+    win_update_scrollbar(true);
+  }
 }
 
 static int previous_transparency;
@@ -915,7 +938,7 @@ cycle_pointer_style()
   cfg.cursor_type = (cfg.cursor_type + 1) % 3;
   term.cursor_invalid = true;
   term_schedule_cblink();
-  win_update();
+  win_update(false);
 }
 
 
@@ -1702,6 +1725,7 @@ static struct {
       else
         ctrl_ch(term.backspace_sends_bs ? CDEL : CTRL('_'));
     when VK_TAB:
+#ifdef handle_alt_tab
       if (alt) {
         if (cfg.switch_shortcuts) {
           // does not work as Alt+TAB is not passed here anyway;
@@ -1713,10 +1737,11 @@ static struct {
         else
           return false;
       }
+#endif
       if (!ctrl)
         shift ? csi('Z') : ch('\t');
       else if (cfg.switch_shortcuts) {
-        win_switch(shift, false);
+        win_switch(shift, lctrl & rctrl);
         return true;
       }
       else
@@ -1915,6 +1940,11 @@ win_key_up(WPARAM wp, LPARAM unused(lp))
       cycle_transparency();
     if (!transparency_pending && cfg.opaque_when_focused)
       win_update_transparency(true);
+  }
+
+  if (key == VK_CONTROL && term.hovering) {
+    term.hovering = false;
+    win_update(false);
   }
 
   if (wp != VK_MENU)

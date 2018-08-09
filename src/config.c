@@ -1,5 +1,5 @@
 // config.c (part of mintty)
-// Copyright 2008-13 Andy Koppe, 2015-2016 Thomas Wolff
+// Copyright 2008-13 Andy Koppe, 2015-2017 Thomas Wolff
 // Based on code from PuTTY-0.60 by Simon Tatham and team.
 // Licensed under the terms of the GNU General Public License v3 or later.
 
@@ -40,12 +40,14 @@ const config default_cfg = {
   .cursor_colour = 0xBFBFBF,
   .underl_colour = (colour)-1,
   .underl_manual = false,
+  .hover_colour = (colour)-1,
   .sel_fg_colour = (colour)-1,
   .sel_bg_colour = (colour)-1,
   .search_fg_colour = 0x000000,
   .search_bg_colour = 0x00DDDD,
   .search_current_colour = 0x0099DD,
   .theme_file = W(""),
+  .background = W(""),
   .colour_scheme = "",
   .transparency = 0,
   .blurred = false,
@@ -68,7 +70,7 @@ const config default_cfg = {
   .show_hidden_fonts = false,
   .font_smoothing = FS_DEFAULT,
   .font_render = FR_UNISCRIBE,
-  .bold_as_font = -1,  // -1 means "the opposite of bold_as_colour"
+  .bold_as_font = false,
   .bold_as_colour = true,
   .allow_blinking = false,
   .locale = "",
@@ -172,6 +174,7 @@ const config default_cfg = {
   .use_system_colours = false,
   .short_long_opts = false,
   .bold_as_special = false,
+  .selection_show_size = false,
   .old_bold = false,
   .ime_cursor_colour = DEFAULT_COLOUR,
   .ansi_colours = {
@@ -225,6 +228,7 @@ options[] = {
   {"BoldColour", OPT_COLOUR, offcfg(bold_colour)},
   {"CursorColour", OPT_COLOUR, offcfg(cursor_colour)},
   {"UnderlineColour", OPT_COLOUR, offcfg(underl_colour)},
+  {"HoverColour", OPT_COLOUR, offcfg(hover_colour)},
   {"UnderlineManual", OPT_BOOL, offcfg(underl_manual)},
   {"HighlightBackgroundColour", OPT_COLOUR, offcfg(sel_bg_colour)},
   {"HighlightForegroundColour", OPT_COLOUR, offcfg(sel_fg_colour)},
@@ -232,6 +236,7 @@ options[] = {
   {"SearchBackgroundColour", OPT_COLOUR, offcfg(search_bg_colour)},
   {"SearchCurrentColour", OPT_COLOUR, offcfg(search_current_colour)},
   {"ThemeFile", OPT_WSTRING, offcfg(theme_file)},
+  {"Background", OPT_WSTRING, offcfg(background)},
   {"ColourScheme", OPT_STRING, offcfg(colour_scheme)},
   {"Transparency", OPT_TRANS, offcfg(transparency)},
 #ifdef support_blurred
@@ -389,6 +394,7 @@ options[] = {
   {"OldBold", OPT_BOOL, offcfg(old_bold)},
   {"ShortLongOpts", OPT_BOOL, offcfg(short_long_opts)},
   {"BoldAsRainbowSparkles", OPT_BOOL, offcfg(bold_as_special)},
+  {"SelectionShowSize", OPT_INT, offcfg(selection_show_size)},
 
   // ANSI colours
   {"Black", OPT_COLOUR, offcfg(ansi_colours[BLACK_I])},
@@ -659,6 +665,7 @@ bool
 parse_colour(string s, colour *cp)
 {
   uint r, g, b;
+  float c, m, y, k = 0;
   if (sscanf(s, "%u,%u,%u", &r, &g, &b) == 3)
     ;
   else if (sscanf(s, "#%2x%2x%2x", &r, &g, &b) == 3)
@@ -666,7 +673,17 @@ parse_colour(string s, colour *cp)
   else if (sscanf(s, "rgb:%2x/%2x/%2x", &r, &g, &b) == 3)
     ;
   else if (sscanf(s, "rgb:%4x/%4x/%4x", &r, &g, &b) == 3)
-    r >>=8, g >>= 8, b >>= 8;
+    r >>= 8, g >>= 8, b >>= 8;
+  else if (sscanf(s, "cmy:%f/%f/%f", &c, &m, &y) == 3
+        || sscanf(s, "cmyk:%f/%f/%f/%f", &c, &m, &y, &k) == 4
+          )
+    if (c >= 0 && c <= 1 && m >= 0 && m <= 1 && y >= 0 && y <= 1 && k >= 0 && k <= 1) {
+      r = (1 - c) * (1 - k) * 255;
+      g = (1 - m) * (1 - k) * 255;
+      b = (1 - y) * (1 - k) * 255;
+    }
+    else
+      return false;
   else {
     int coli = -1;
     int len = strlen(s);
@@ -1270,6 +1287,7 @@ load_config(string filename, int to_save)
   if (to_save) {
     copy_config("after load", &file_cfg, &cfg);
   }
+  //printf("load_config %s %d bd %d\n", filename, to_save, cfg.bold_as_font);
 }
 
 void
@@ -1333,13 +1351,22 @@ finish_config(void)
     strset(&cfg.charset, "");
 
   // bold_as_font used to be implied by !bold_as_colour.
+  //printf("finish_config bd %d\n", cfg.bold_as_font);
+#ifdef previous_patch_for_242
+  // This tweak was added in commit/964b3097e4624d4b5a3231389d34c00eb5cd1d6d
+  // to support bold display as both font and colour (#242)
+  // but it does not seem necessary anymore with the current code and options
+  // handling, and it confuses option initialization (mintty/wsltty#103),
+  // so it's removed.
   if (cfg.bold_as_font == -1) {
     cfg.bold_as_font = !cfg.bold_as_colour;
     remember_file_option("finish", find_option(true, "BoldAsFont"));
   }
+#endif
 
   if (0 < cfg.transparency && cfg.transparency <= 3)
     cfg.transparency *= 16;
+  //printf("finish_config bd %d\n", cfg.bold_as_font);
 }
 
 static void
@@ -1467,6 +1494,7 @@ apply_config(bool save)
   }
   else if (had_theme)
     win_reset_colours();
+  //printf("apply_config %d bd %d\n", save, cfg.bold_as_font);
 }
 
 

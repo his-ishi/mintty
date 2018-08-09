@@ -13,16 +13,33 @@
 
 struct term term;
 
+typedef struct {
+  termline ** buf;
+  int start;
+  int length;
+  int capacity;
+} circbuf;
+
+enum {
+  NO_UPDATE = 0,
+  PARTIAL_UPDATE = 1,
+  FULL_UPDATE = 2
+};
+
 static int markpos = 0;
 static bool markpos_valid = false;
 
 const cattr CATTR_DEFAULT =
-            {.attr = ATTR_DEFAULT, .truefg = 0, .truebg = 0};
+            {.attr = ATTR_DEFAULT,
+             .truefg = 0, .truebg = 0, .ulcolr = (colour)-1};
 
-termchar basic_erase_char = {.cc_next = 0, .chr = ' ',
-                    /* CATTR_DEFAULT */
-                    .attr = {.attr = ATTR_DEFAULT, .truefg = 0, .truebg = 0}
-                    };
+termchar basic_erase_char =
+   {.cc_next = 0, .chr = ' ',
+            /* CATTR_DEFAULT */
+    .attr = {.attr = ATTR_DEFAULT,
+             .truefg = 0, .truebg = 0, .ulcolr = (colour)-1}
+   };
+
 
 static bool
 vt220(string term)
@@ -48,7 +65,7 @@ tblink_cb(void)
 {
   term.tblinker = !term.tblinker;
   term_schedule_tblink();
-  win_update();
+  win_update(false);
 }
 
 static void
@@ -65,7 +82,7 @@ tblink2_cb(void)
 {
   term.tblinker2 = !term.tblinker2;
   term_schedule_tblink2();
-  win_update();
+  win_update(false);
 }
 
 static void
@@ -85,7 +102,7 @@ cblink_cb(void)
 {
   term.cblinker = !term.cblinker;
   term_schedule_cblink();
-  win_update();
+  win_update(false);
 }
 
 void
@@ -101,7 +118,7 @@ static void
 vbell_cb(void)
 {
   term.in_vbell = false;
-  win_update();
+  win_update(false);
 }
 
 void
@@ -233,6 +250,7 @@ term_reset(bool full)
 
   if (full) {
     term.selected = false;
+    term.hovering = false;
     term.on_alt_screen = false;
     term_print_finish();
     if (term.lines) {
@@ -271,7 +289,7 @@ show_screen(bool other_screen, bool flip)
     term_schedule_cblink();
   }
 
-  win_update();
+  win_update(false);
 }
 
 /* Return to active screen and reset scrollback */
@@ -1350,7 +1368,7 @@ fallback:;
       return false;
   }
   char * en = strdup(pre);
-  char ec[6];
+  char ec[7];
   if (e.seq) {
     for (uint i = 0; i < lengthof(emoji_seqs->chs) && ed(emoji_seqs[e.idx].chs[i]); i++) {
       xchar xc = ed(emoji_seqs[e.idx].chs[i]);
@@ -1363,7 +1381,7 @@ fallback:;
     }
   }
   else {
-    sprintf(ec, "%04x", emoji_bases[e.idx].ch);
+    snprintf(ec, 7, "%04x", emoji_bases[e.idx].ch);
     strappend(en, ec);
   }
   strappend(en, suf);
@@ -1666,6 +1684,8 @@ term_paint(void)
         );
 
       if (selected) {
+        tattr.attr |= TATTR_SELECTED;
+
         colour bg = win_get_colour(SEL_COLOUR_I);
         if (bg != (colour)-1) {
           tattr.truebg = bg;
@@ -1683,6 +1703,16 @@ term_paint(void)
         }
         else
           tattr.attr ^= ATTR_REVERSE;
+      }
+
+      if (term.hovering &&
+          posle(term.hover_start, scrpos) && poslt(scrpos, term.hover_end)) {
+        tattr.attr &= ~UNDER_MASK;
+        tattr.attr |= ATTR_UNDER;
+        if (cfg.hover_colour != (colour)-1) {
+          tattr.attr |= ATTR_ULCOLOUR;
+          tattr.ulcolr = cfg.hover_colour;
+        }
       }
 
       bool flashchar = term.in_vbell &&
@@ -1774,9 +1804,15 @@ term_paint(void)
             uint em = *(uint *)ee;
             d->attr.truefg = em;
 
-            // refresh cached copy
-            tattr = d->attr;
-            // inhibit subsequent emoji sequence components
+            // refresh cached copy to avoid display delay
+            if (tattr.attr & TATTR_SELECTED) {
+              tattr = d->attr;
+              // need to propagate this to enable emoji highlighting
+              tattr.attr |= TATTR_SELECTED;
+            }
+            else
+              tattr = d->attr;
+            // inhibit rendering of subsequent emoji sequence components
             for (int i = 1; i < e.len; i++) {
               d[i].attr.attr &= ~ATTR_FGMASK;
               d[i].attr.attr |= TATTR_EMOJI;
@@ -1917,6 +1953,7 @@ term_paint(void)
           && (dispchars[j].chr != newchars[j].chr
               || (dispchars[j].attr.truefg != newchars[j].attr.truefg)
               || (dispchars[j].attr.truebg != newchars[j].attr.truebg)
+              || (dispchars[j].attr.ulcolr != newchars[j].attr.ulcolr)
               || (dispchars[j].attr.attr & ~DATTR_STARTRUN) != newchars[j].attr.attr
               || (prevdirtyitalic && (dispchars[j].attr.attr & DATTR_STARTRUN))
              ))
@@ -2019,6 +2056,28 @@ term_paint(void)
         wchar esp[] = W("        ");
         if (elen) {
           if (!overlaying) {
+            if (newchars[x].attr.attr & TATTR_SELECTED) {
+              // here we handle background colour once more because
+              // somehow the selection highlighting information from above
+              // got lost in the chaos of chars[], newchars[], attr, tattr...
+              // some substantial revision might be good here, in theory...
+
+              // the main problem here is the reuse of truefg as an 
+              // emoji indicator; we have to make sure truefg isn't 
+              // used anymore for an emoji...
+              eattr.attr |= TATTR_SELECTED;
+              colour bg = eattr.attr & ATTR_REVERSE
+                          ? win_get_colour(SEL_TEXT_COLOUR_I)
+                          : win_get_colour(SEL_COLOUR_I);
+              if (bg == (colour)-1)
+                bg = eattr.attr & ATTR_REVERSE
+                          ? win_get_colour(BG_COLOUR_I)
+                          : win_get_colour(FG_COLOUR_I);
+              eattr.truebg = bg;
+              eattr.attr = (eattr.attr & ~ATTR_BGMASK) | (TRUE_COLOUR << ATTR_BGSHIFT);
+              eattr.attr &= ~ATTR_REVERSE;
+            }
+
             win_text(x, y, esp, elen, eattr, textattr, lattr | LATTR_DISP1, has_rtl);
             flush_text();
           }
@@ -2098,8 +2157,9 @@ term_paint(void)
 #endif
 
       bool break_run = (tattr.attr != attr.attr)
-                       || (tattr.truefg != attr.truefg)
-                       || (tattr.truebg != attr.truebg);
+                    || (tattr.truefg != attr.truefg)
+                    || (tattr.truebg != attr.truebg)
+                    || (tattr.ulcolr != attr.ulcolr);
 
       inline bool has_comb(termchar * tc)
       {
@@ -2339,7 +2399,7 @@ term_scroll(int rel, int where)
     term.disptop = sbtop;
   if (term.disptop > 0)
     term.disptop = 0;
-  win_update();
+  win_update(false);
 
   if (do_schedule_update) {
     win_schedule_update();
@@ -2389,6 +2449,6 @@ term_hide_cursor(void)
 {
   if (term.cursor_on) {
     term.cursor_on = false;
-    win_update();
+    win_update(false);
   }
 }
