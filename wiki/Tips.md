@@ -59,6 +59,8 @@ items automatically based on their icon and command line.  This can be
 overridden by setting the AppID to a custom string, in which case windows
 with the same AppID are grouped together.
 
+The AppID supports placeholder parameters for a flexible grouping 
+configuration (see manual).
 The special value `AppID=@` causes mintty to derive an implicit AppID 
 from the WSL system name, in order to achieve WSL distribution-specific 
 taskbar grouping. This resolves taskbar grouping problems in some cases 
@@ -114,7 +116,6 @@ Note, the `wslbridge` tool needs to be installed in `/bin` for this purpose
 A WSL terminal session can be configured for the mintty session launcher 
 in the config file, like:
 * `SessionCommands=Ubuntu:--WSL=Ubuntu`
-
 
 ### WSLtty, the standalone WSL mintty terminal ###
 
@@ -319,7 +320,7 @@ Finally, a couple of bindings for convenient searching of the command history. J
 ```
 
 
-## Keyboard not working as expected in certain applications (e.g. vim) ##
+## Unexpected behaviour with certain applications (e.g. vim) ##
 
 If for example the PgUp and PgDn keys do not work in your editor, the reason 
 may be that in the mintty Options, the Terminal Type was set to "vt100" 
@@ -348,6 +349,14 @@ let &t_SI.="\e[5 q"
 let &t_EI.="\e[1 q"
 let &t_te.="\e[0 q"
 ```
+
+### Blinking cursor reset ###
+
+Some applications may reset cursor style, especially cursor blinking, 
+after terminating, caused by the 
+[terminfo database](http://invisible-island.net/ncurses/man/terminfo.5.html) 
+including the corresponding reset sequence in the “normal cursor” setting.
+This is avoided with mintty option `SuppressDEC=12`.
 
 ### Avoiding escape timeout issues in vim ###
 
@@ -437,7 +446,9 @@ For a separate compose key solution, the most seamless and stable
 **[WinCompose](https://github.com/SamHocevar/wincompose)**.
 
 
-## Changing colours ##
+## Appearance ##
+
+### Changing colours ###
 
 The default foreground, background and cursor colours can be changed in the options dialog, or by specifying the _ForegroundColour_, _BackgroundColour_ and _CursorColour_ settings in the configuration file or on the command line.
 
@@ -489,8 +500,7 @@ Different notations are accepted for colour specifications:
 * ```cmyk:C.C/M.M/Y.Y/K.K``` (float values between 0 and 1)
 * _color-name_ (using X11 color names, e.g. ```echo -ne '\e]10;bisque2\a'```)
 
-
-## Using colour schemes (“Themes”) ##
+### Using colour schemes (“Themes”) ###
 
 Colour schemes (that redefine ANSI colours and possibly foreground/background 
 colours) can be loaded with the option ```-C``` (capital C) or ```--loadconfig``` 
@@ -533,6 +543,38 @@ Mintty also provides the command-line script ```mintheme``` which can
 display the themes available in the mintty configuration directories or 
 activate one of them in the current mintty window.
 
+### Background image ###
+
+As an alternative to a background colour, mintty also supports graphic 
+background. This can be configured with the option `Background` or 
+set dynamically using special syntax of the colour background OSC sequence.
+The respective parameter addresses an image file, preceded by a mode 
+prefix and optionally followed by a transparancy value.
+Prefixes are:
+* `*` use image file as tiled background
+* `_` (optional with option Background) use image as picture background, scaled to window
+* `%` use image as picture background and scale window to its aspect ratio
+* `=` use desktop background (if tiled and unscaled), for a virtual floating window
+
+If the background filename is followed by a comma and a number between 1 and 254, 
+the background image will be dimmed towards the background colour;
+with a value of 255, the alpha transparency values of the image will be used.
+
+Examples:
+```
+Background=C:\cygwin\usr\share\backgrounds\tiles\rough_paper.png
+-o Background='C:\cygwin\usr\share\backgrounds\tiles\rough_paper.png'
+echo -ne '\e]11;*/usr/share/backgrounds/tiles/rough_paper.png\a'
+echo -ne '\e]11;_pontneuf.png,99\a'
+echo -ne '\e]11;=,99\a'
+```
+
+Note that relative pathnames depend on proper detection of the current directory 
+of the foreground process.
+Note that absolute pathnames within the cygwin file system are likely 
+not to work among different cygwin installations. 
+To configure a background in `$APPDATA/mintty/config` (or 
+`%APPDATA%/wsltty/config`), Windows pathname syntax should be used.
 
 ## Providing and selecting fonts ##
 
@@ -722,7 +764,10 @@ font 1 is therefore discouraged.
 
 Note: The control sequences for Fraktur (“Gothic”) font are described 
 in ECMA-48, see also [wiki:ANSI code](https://en.wikipedia.org/wiki/ANSI_escape_code).
-To use this feature, it is suggested to install `F25 Blackletter Typewriter`.
+To use this feature, it is suggested to install `F25 Blackletter Typewriter`,
+e.g. from:
+* https://www.dafont.com/f25-blacklettertypewriter.font
+* https://fontmeme.com/fonts/f25-blackletter-typewriter-font/
 
 Note: RGB colour values are scaled to a maximum of 255 (=100%).
 CMY(K) colour values are scaled to a maximum of the given parameter F (=100%).

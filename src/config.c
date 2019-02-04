@@ -159,6 +159,7 @@ const config default_cfg = {
   .suppress_wheel = "",
   .filter_paste = "",
   .input_clears_selection = true,
+  .suspbuf_max = 8080,
   .trim_selection = true,
   .charwidth = 0,
   .emojis = 0,
@@ -390,6 +391,7 @@ options[] = {
   {"SuppressMouseWheel", OPT_STRING, offcfg(suppress_wheel)},
   {"FilterPasteControls", OPT_STRING, offcfg(filter_paste)},
   {"ClearSelectionOnInput", OPT_BOOL, offcfg(input_clears_selection)},
+  {"SuspendWhileSelecting", OPT_INT, offcfg(suspbuf_max)},
   {"TrimSelection", OPT_BOOL, offcfg(trim_selection)},
   {"Charwidth", OPT_CHARWIDTH, offcfg(charwidth)},
   {"Emojis", OPT_EMOJIS, offcfg(emojis)},
@@ -1617,6 +1619,7 @@ getregstr(HKEY key, wstring subkey, wstring attribute)
     return 0;
   wchar * val = malloc (len);
   res = RegQueryValueExW(sk, attribute, 0, &type, (void *)val, &len);
+  RegCloseKey(sk);
   if (res) {
     free(val);
     return 0;

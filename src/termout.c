@@ -4,7 +4,7 @@
 // Licensed under the terms of the GNU General Public License v3 or later.
 
 #include "termpriv.h"
-#include "winpriv.h"  // win_get_font, win_change_font
+#include "winpriv.h"  // win_get_font, win_change_font, win_led
 
 #include "win.h"
 #include "appinfo.h"
@@ -1734,6 +1734,11 @@ do_csi(uchar c)
         term.modify_other_keys = 0;
       else if (arg0 == 4)
         term.modify_other_keys = arg1;
+    when CPAIR('>', 'p'):     /* xterm: pointerMode */
+      if (arg0 == 0)
+        term.hide_mouse = false;
+      else if (arg0 == 2)
+        term.hide_mouse = true;
     when CPAIR('>', 'n'):     /* xterm: modifier key setting */
       /* only the modifyOtherKeys setting is implemented */
       if (arg0 == 4)
@@ -1825,6 +1830,15 @@ do_csi(uchar c)
       term.locator_bottom = arg2 ?: y;
       term.locator_right = arg3 ?: x;
       term.locator_rectangle = true;
+    }
+    when 'q': {  /* DECLL: load keyboard LEDs */
+      if (arg0 > 20)
+        win_led(arg0 - 20, false);
+      else if (arg0)
+        win_led(arg0, true);
+      else {
+        win_led(0, false);
+      }
     }
   }
 }
@@ -2243,7 +2257,7 @@ do_cmd(void)
     when 104: do_colour_osc(true, 4, true);
     when 105: do_colour_osc(true, 5, true);
     when 10:  do_colour_osc(false, FG_COLOUR_I, false);
-    when 11:  if (strchr("*_%", *term.cmd_buf)) {
+    when 11:  if (strchr("*_%=", *term.cmd_buf)) {
                 wchar * bn = cs__mbstowcs(term.cmd_buf);
                 wstrset(&cfg.background, bn);
                 free(bn);
@@ -3010,22 +3024,20 @@ void
 term_write(const char *buf, uint len)
 {
  /*
-    During drag-selects, we do not wish to process terminal output,
-    because the user will want the screen to hold still to be selected.
+    During drag-selects, some people do not wish to process terminal output,
+    because the user may want the screen to hold still to be selected.
     Therefore, we maintain a suspend-output-on-selection buffer which 
-    can grow up to a moderate size.
+    can grow up to a configurable size.
   */
-  if (term_selecting()) {
-#define suspmax 88800
-#define suspdelta 888
+  if (term_selecting() && cfg.suspbuf_max > 0) {
     // if buffer size would be exceeded, flush; prevent uint overflow
-    if (len > suspmax - term.suspbuf_pos)
+    if (len > cfg.suspbuf_max - term.suspbuf_pos)
       term_flush();
     // if buffer length does not exceed max size, append output
-    if (len <= suspmax - term.suspbuf_pos) {
+    if (len <= cfg.suspbuf_max - term.suspbuf_pos) {
       // make sure buffer is large enough
       if (term.suspbuf_pos + len > term.suspbuf_size) {
-        term.suspbuf_size += suspdelta;
+        term.suspbuf_size = term.suspbuf_pos + len;
         term.suspbuf = renewn(term.suspbuf, term.suspbuf_size);
       }
       memcpy(term.suspbuf + term.suspbuf_pos, buf, len);
