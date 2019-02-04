@@ -1330,6 +1330,25 @@ clipboard in rich text format (RTF) in addition to plain text format.
 RTF preserves colours and styles when pasting text into applications that
 support it, e.g. word processors.
 
+\fINote:\fP Copy as rich text is also available as an explicit item in 
+the extended context menu.
+
+.TP
+\fBCopy as HTML\fP (CopyAsHTML=0)
+With this option, mintty also copies text in HTML format, using flexible 
+levels of HTML formatting, when applying the normal copy function.
+.br
+\(en \fB0\fP: do not include HTML
+.br
+\(en \fB1\fP: copy HTML text only (no font information)
+.br
+\(en \fB2\fP: copy HTML text (no global background)
+.br
+\(en \fB3\fP: copy HTML (close to screen layout)
+
+\fINote:\fP Copy as HTML levels are also available as explicit items in 
+the extended context menu.
+
 .TP
 \fBClicks place command line cursor\fP (ClicksPlaceCursor=no)
 If enabled, the command line cursor can be placed by pressing the left
@@ -1686,6 +1705,16 @@ for an overview of SGR attributes.
 .br
 See \fIhttp://invisible-island.net/xterm/ctlseqs/ctlseqs.txt\fP
 for a full listing of escape control sequences.
+.br
+For some of the option values, more specific configuration parameters exist:
+.br
+\(en AllowBlinking=false \(<> SuppressSGR=5,6
+.br
+\(en Enable132ColumnSwitching=false \(~~ SuppressDEC=3 (permanent)
+.br
+\(en NoAltScreen=true \(~~ SuppressDEC=47,1047,1048,1049 (switchable)
+.br
+\(en AllowSetSelection=false \(<> SuppressOSC=52
 .RE
 
 .TP
@@ -2168,6 +2197,16 @@ Supported actions are described as follows:
 .br
 \(en \fBcopy\fP: copies the selection to the clipboard
 .br
+\(en \fBcopy-text\fP: copies text only
+.br
+\(en \fBcopy-rtf\fP: copies rich text format
+.br
+\(en \fBcopy-html-text\fP: copies HTML text only (no font information)
+.br
+\(en \fBcopy-html-format\fP: copies HTML text (no global background)
+.br
+\(en \fBcopy-html-full\fP: copies HTML (close to screen layout)
+.br
 \(en \fBpaste\fP: pastes from the clipboard
 .br
 \(en \fBcopy-paste\fP: copies and pastes
@@ -2488,6 +2527,8 @@ in order to avoid the risk of injecting commands via tricky selected text.
 Examples:
 .br
 \(en \fBUserCommands=Paste capital:echo -n "$MINTTY_SELECT" | tr 'a-z' 'A-Z';Paste small:echo -n "$MINTTY_SELECT" | tr 'A-Z' 'a-z'\fP
+.br
+\(en \fBUserCommands=google:cygstart https://www.google.de/search?q="$MINTTY_SELECT"\fP
 
 \fINote:\fP Control characters need to be embedded verbatim; there is no escape notation.
 
