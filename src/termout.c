@@ -279,6 +279,8 @@ write_char(wchar c, int width)
     clear_cc(line, curs->x);
     line->chars[curs->x].chr = c;
     line->chars[curs->x].attr = curs->attr;
+    if (cfg.ligatures_support)
+      term_invalidate(0, curs->y, curs->x, curs->y);
   }
 
   if (curs->wrapnext && curs->autowrap && width > 0) {
@@ -460,69 +462,81 @@ do_esc(uchar c)
   term_cursor *curs = &term.curs;
   term.state = NORMAL;
 
-  // NRC tweaks
-  uchar nrc_designate = 0;
-  uchar nrc_select = 0;
-  // first check for two-character character set designations (%5, %6)
-  if (term.esc_mod == 0xFF && esc_mod1 == '%'
-      && strchr("()-*.+/", esc_mod0)) {
-    // transform two-character character set designations
-    nrc_designate = esc_mod0;
-    nrc_select = c == '5' ? CSET_DECSPGR : c;
-  }
-  // then check for further designations that work without decnrc_enabled
-  else if (strchr("<", c) && strchr("()-*.+/", term.esc_mod)) {
-    // '<': DEC Supplementary
-    nrc_designate = term.esc_mod;
-    nrc_select = c;
-  }
-  // ↕ this is a bit ugly (xterm uses a table), but hey it works
-  if (term.curs.decnrc_enabled
-     // also allow unguarded designations
-     || (nrc_designate && strchr("%<", nrc_select))
-     ) {
-    if (!nrc_designate && strchr("()-*.+/", term.esc_mod)) {
-      nrc_designate = term.esc_mod;
-      // transform alternative designation indicators
-      switch (c) {
-        when 'C':  nrc_select = CSET_FI;
-        when 'E':  nrc_select = CSET_NO;
-        when '6':  nrc_select = CSET_NO;
-        when 'H':  nrc_select = CSET_SE;
-        when 'f':  nrc_select = CSET_FR;  // xterm, Kermit; not DEC
-        when '9':  nrc_select = CSET_CA;  // xterm, DEC VT510; not VT320
-        otherwise: nrc_select = c;
-      }
+  // NRC designations
+  // representation of NRC sequences at this point:
+  //		term.esc_mod esc_mod0 esc_mod1 c
+  // ESC)B	29 00 00 42
+  // ESC)%5	FF 29 25 35
+  // 94-character set designation as G0...G3: ()*+
+  // 96-character set designation as G1...G3:  -./
+  if (term.esc_mod == 0xFF)
+    term.esc_mod = esc_mod0;
+  uchar csmask = 0;
+  int gi;
+  void check_designa(char * designa, uchar cstype) {
+    char * csdesigna = strchr(designa, term.esc_mod);
+    if (csdesigna) {
+      csmask = cstype;
+      gi = csdesigna - designa + cstype - 1;
     }
-    // if a character set designation was identified, check if it's applicable
-    if (nrc_designate) {
-      if (strchr("<%45RQKY`6Z7=", nrc_select)) {
-        // 94 character sets
-        switch (nrc_designate) {
-          when '(': curs->csets[0] = nrc_select;
-          when ')': curs->csets[1] = nrc_select;
-          when '*': curs->csets[2] = nrc_select;
-          when '+': curs->csets[3] = nrc_select;
-          otherwise: nrc_select = 0;
-        }
-      }
-      else if (strchr("A", nrc_select)) {
-        // 96 character sets
-        switch (nrc_designate) {
-          when '-': curs->csets[1] = nrc_select;
-          when '.': curs->csets[2] = nrc_select;
-          when '/': curs->csets[3] = nrc_select;
-          otherwise: nrc_select = 0;
-        }
-      }
-      else
-        nrc_select = 0;
-      // finish handling if a character set designation was applied
-      if (nrc_select) {
+  }
+  check_designa("()*+", 1);  // 94-character set designation?
+  check_designa("-./", 2);  // 96-character set designation?
+  if (csmask) {
+    static struct {
+      ushort design;
+      uchar cstype;  // 1: 94-character set, 2: 96-character set, 3: both
+      bool free;     // does not need NRC enabling
+      uchar cs;
+    } csdesignations[] = {
+      {'B', 1, 1, CSET_ASCII},	// ASCII
+      {'A', 3, 1, CSET_GBCHR},	// UK Latin-1
+      {'0', 1, 1, CSET_LINEDRW},	// DEC Special Line Drawing
+      {'>', 1, 1, CSET_TECH},		// DEC Technical
+      {'U', 1, 1, CSET_OEM},		// OEM Codepage 437
+      {'<', 1, 1, CSET_DECSUPP},	// DEC Supplementary (VT200)
+      {CPAIR('%', '5'), 1, 1, CSET_DECSPGR},	// DEC Supplementary Graphics (VT300)
+      // definitions for NRC support:
+      {'4', 1, 0, CSET_NL},	// Dutch
+      {'C', 1, 0, CSET_FI},	// Finnish
+      {'5', 1, 0, CSET_FI},	// Finnish
+      {'R', 1, 0, CSET_FR},	// French
+      {'f', 1, 0, CSET_FR},	// French
+      {'Q', 1, 0, CSET_CA},	// French Canadian (VT200, VT300)
+      {'9', 1, 0, CSET_CA},	// French Canadian (VT200, VT300)
+      {'K', 1, 0, CSET_DE},	// German
+      {'Y', 1, 0, CSET_IT},	// Italian
+      {'`', 1, 0, CSET_NO},	// Norwegian/Danish
+      {'E', 1, 0, CSET_NO},	// Norwegian/Danish
+      {'6', 1, 0, CSET_NO},	// Norwegian/Danish
+      {CPAIR('%', '6'), 1, 0, CSET_PT},	// Portuguese (VT300)
+      {'Z', 1, 0, CSET_ES},	// Spanish
+      {'H', 1, 0, CSET_SE},	// Swedish
+      {'7', 1, 0, CSET_SE},	// Swedish
+      {'=', 1, 0, CSET_CH},	// Swiss
+      // 96-character sets (xterm 336)
+      {'L', 2, 1, CSET_ISO_Latin_Cyrillic},
+      {'F', 2, 1, CSET_ISO_Greek_Supp},
+      {'H', 2, 1, CSET_ISO_Hebrew},
+      {'M', 2, 1, CSET_ISO_Latin_5},
+      {CPAIR('"', '?'), 1, 1, CSET_DEC_Greek_Supp},
+      {CPAIR('"', '4'), 1, 1, CSET_DEC_Hebrew_Supp},
+      {CPAIR('%', '0'), 1, 1, CSET_DEC_Turkish_Supp},
+      {CPAIR('"', '>'), 1, 0, CSET_NRCS_Greek},
+      {CPAIR('%', '='), 1, 0, CSET_NRCS_Hebrew},
+      {CPAIR('%', '2'), 1, 0, CSET_NRCS_Turkish},
+    };
+    ushort nrc_code = CPAIR(esc_mod1, c);
+    for (uint i = 0; i < lengthof(csdesignations); i++)
+      if (csdesignations[i].design == nrc_code
+          && (csdesignations[i].cstype & csmask)
+          && (csdesignations[i].free || term.curs.decnrc_enabled)
+         )
+      {
+        curs->csets[gi] = csdesignations[i].cs;
         term_update_cs();
         return;
       }
-    }
   }
 
   switch (CPAIR(term.esc_mod, c)) {
@@ -586,31 +600,6 @@ do_esc(uchar c)
       term.lines[curs->y]->lattr = LATTR_NORM;
     when CPAIR('#', '6'):  /* DECDWL: 2*width */
       term.lines[curs->y]->lattr = LATTR_WIDE;
-    when CPAIR('(', 'A') or CPAIR('(', 'B') or CPAIR('(', '0') or CPAIR('(', '>'):
-     /* GZD4: G0 designate 94-set */
-      curs->csets[0] = c;
-      term_update_cs();
-    when CPAIR('(', 'U'):  /* G0: OEM character set */
-      curs->csets[0] = CSET_OEM;
-      term_update_cs();
-    when CPAIR(')', 'A') or CPAIR(')', 'B') or CPAIR(')', '0') or CPAIR(')', '>')
-      or CPAIR('-', 'A') or CPAIR('-', 'B') or CPAIR('-', '0') or CPAIR('-', '>'):
-     /* G1D4: G1-designate 94-set */
-      curs->csets[1] = c;
-      term_update_cs();
-    when CPAIR(')', 'U'): /* G1: OEM character set */
-      curs->csets[1] = CSET_OEM;
-      term_update_cs();
-    when CPAIR('*', 'A') or CPAIR('*', 'B') or CPAIR('*', '0') or CPAIR('*', '>')
-      or CPAIR('.', 'A') or CPAIR('.', 'B') or CPAIR('.', '0') or CPAIR('.', '>'):
-     /* Designate G2 character set */
-      curs->csets[2] = c;
-      term_update_cs();
-    when CPAIR('+', 'A') or CPAIR('+', 'B') or CPAIR('+', '0') or CPAIR('+', '>')
-      or CPAIR('/', 'A') or CPAIR('/', 'B') or CPAIR('/', '0') or CPAIR('/', '>'):
-     /* Designate G3 character set */
-      curs->csets[3] = c;
-      term_update_cs();
     when CPAIR('%', '8') or CPAIR('%', 'G'):
       curs->utf = true;
       term_update_cs();
@@ -2234,6 +2223,7 @@ do_cmd(void)
 {
   char *s = term.cmd_buf;
   s[term.cmd_len] = 0;
+  //printf("OSC %d <%s>\n", term.cmd_num, s);
 
   if (*cfg.suppress_osc && contains(cfg.suppress_osc, term.cmd_num))
     // skip suppressed OSC command
@@ -2286,7 +2276,20 @@ do_cmd(void)
       else
         cs_set_locale(s);
     when 7721:  // Copy window title to clipboard.
-        win_copy_title();
+      win_copy_title();
+    when 7773: {  // Change icon.
+      uint icon_index = 0;
+      char *comma = strrchr(s, ',');
+      if (comma) {
+        char *start = comma + 1, *end;
+        icon_index = strtoul(start, &end, 0);
+        if (start != end && !*end)
+          *comma = 0;
+        else
+          icon_index = 0;
+      }
+      win_set_icon(s, icon_index);
+    }
     when 7770:  // Change font size.
       if (!strcmp(s, "?"))
         child_printf("\e]7770;%u\e\\", win_get_font_size());
@@ -2373,34 +2376,9 @@ term_print_finish(void)
   }
 }
 
-/* Empty the input buffer */
-void
-term_flush(void)
+static void
+term_do_write(const char *buf, uint len)
 {
-  term_write(term.inbuf, term.inbuf_pos);
-  free(term.inbuf);
-  term.inbuf = 0;
-  term.inbuf_pos = 0;
-  term.inbuf_size = 0;
-}
-
-void
-term_write(const char *buf, uint len)
-{
- /*
-  * During drag-selects, we do not process terminal input,
-  * because the user will want the screen to hold still to be selected.
-  */
-  if (term_selecting()) {
-    if (term.inbuf_pos + len > term.inbuf_size) {
-      term.inbuf_size = max(term.inbuf_pos, term.inbuf_size * 4 + 4096);
-      term.inbuf = renewn(term.inbuf, term.inbuf_size);
-    }
-    memcpy(term.inbuf + term.inbuf_pos, buf, len);
-    term.inbuf_pos += len;
-    return;
-  }
-
   // Reset cursor blinking.
   term.cblinker = 1;
   term_schedule_cblink();
@@ -2533,6 +2511,12 @@ term_write(const char *buf, uint len)
           continue;
         }
 
+        // Non-characters
+        if (wc == 0xFFFE || wc == 0xFFFF) {
+          write_error();
+          continue;
+        }
+
         cattrflags asav = term.curs.attr.attr;
 
         // Everything else
@@ -2608,9 +2592,9 @@ term_write(const char *buf, uint len)
             }
           when CSET_TECH:  // DEC Technical character set
             if (c > ' ' && c < 0x7F) {
-              // = W("⎷┌─⌠⌡│⎡⎣⎤⎦⎛⎝⎞⎠⎨⎬␦␦╲╱␦␦␦␦␦␦␦≤≠≥∫∴∝∞÷Δ∇ΦΓ∼≃Θ×Λ⇔⇒≡ΠΨ␦Σ␦␦√ΩΞΥ⊂⊃∩∪∧∨¬αβχδεφγηιθκλ␦ν∂πψρστ␦ƒωξυζ←↑→↓")
-              // = W("⎷┌─⌠⌡│⎡⎣⎤⎦⎛⎝⎞⎠⎨⎬╶╶╲╱╴╴╳␦␦␦␦≤≠≥∫∴∝∞÷Δ∇ΦΓ∼≃Θ×Λ⇔⇒≡ΠΨ␦Σ␦␦√ΩΞΥ⊂⊃∩∪∧∨¬αβχδεφγηιθκλ␦ν∂πψρστ␦ƒωξυζ←↑→↓")
-              wc = W("⎷┌─⌠⌡│⎡⎣⎤⎦⎧⎩⎫⎭⎨⎬╶╶╲╱╴╴╳␦␦␦␦≤≠≥∫∴∝∞÷Δ∇ΦΓ∼≃Θ×Λ⇔⇒≡ΠΨ␦Σ␦␦√ΩΞΥ⊂⊃∩∪∧∨¬αβχδεφγηιθκλ␦ν∂πψρστ␦ƒωξυζ←↑→↓")
+              // = W("⎷┌─⌠⌡│⎡⎣⎤⎦⎛⎝⎞⎠⎨⎬￿￿╲╱￿￿￿￿￿￿￿≤≠≥∫∴∝∞÷Δ∇ΦΓ∼≃Θ×Λ⇔⇒≡ΠΨ￿Σ￿￿√ΩΞΥ⊂⊃∩∪∧∨¬αβχδεφγηιθκλ￿ν∂πψρστ￿ƒωξυζ←↑→↓")
+              // = W("⎷┌─⌠⌡│⎡⎣⎤⎦⎛⎝⎞⎠⎨⎬╶╶╲╱╴╴╳￿￿￿￿≤≠≥∫∴∝∞÷Δ∇ΦΓ∼≃Θ×Λ⇔⇒≡ΠΨ￿Σ￿￿√ΩΞΥ⊂⊃∩∪∧∨¬αβχδεφγηιθκλ￿ν∂πψρστ￿ƒωξυζ←↑→↓")
+              wc = W("⎷┌─⌠⌡│⎡⎣⎤⎦⎧⎩⎫⎭⎨⎬╶╶╲╱╴╴╳￿￿￿￿≤≠≥∫∴∝∞÷Δ∇ΦΓ∼≃Θ×Λ⇔⇒≡ΠΨ￿Σ￿￿√ΩΞΥ⊂⊃∩∪∧∨¬αβχδεφγηιθκλ￿ν∂πψρστ￿ƒωξυζ←↑→↓")
                    [c - ' ' - 1];
               if (c <= 0x37) {
                 static uchar techdraw_code[23] = {
@@ -2625,9 +2609,6 @@ term_write(const char *buf, uint len)
                 term.curs.attr.attr |= ((cattrflags)dispcode) << ATTR_GRAPH_SHIFT;
               }
             }
-          when CSET_GBCHR:  // NRC United Kingdom
-            if (c == '#')
-              wc = 0xA3; // pound sign
           when CSET_NL:
             wc = NRC(W("£¾ĳ½|^_`¨ƒ¼´"));  // Dutch
           when CSET_FI:
@@ -2653,8 +2634,64 @@ term_write(const char *buf, uint len)
           when CSET_DECSPGR   // DEC Supplemental Graphic
             or CSET_DECSUPP:  // DEC Supplemental (user-preferred in VT*)
             if (c > ' ' && c < 0x7F) {
-              wc = W("¡¢£␦¥␦§¤©ª«␦␦␦␦°±²³␦µ¶·␦¹º»¼½␦¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏ␦ÑÒÓÔÕÖŒØÙÚÛÜŸ␦ßàáâãäåæçèéêëìíîï␦ñòóôõöœøùúûüÿ␦")
+              wc = W("¡¢£￿¥￿§¤©ª«￿￿￿￿°±²³￿µ¶·￿¹º»¼½￿¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏ￿ÑÒÓÔÕÖŒØÙÚÛÜŸ￿ßàáâãäåæçèéêëìíîï￿ñòóôõöœøùúûüÿ￿")
                    [c - ' ' - 1];
+            }
+          // 96-character sets (UK / xterm 336)
+          when CSET_GBCHR:  // NRC United Kingdom
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ")
+                   [c - ' '];
+            }
+          when CSET_ISO_Latin_Cyrillic:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" ЁЂЃЄЅІЇЈЉЊЋЌ­ЎЏАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя№ёђѓєѕіїјљњћќ§ўџ")
+                   [c - ' '];
+            }
+          when CSET_ISO_Greek_Supp:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" ‘’£€₯¦§¨©ͺ«¬­￿―°±²³΄΅Ά·ΈΉΊ»Ό½ΎΏΐΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡ￿ΣΤΥΦΧΨΩΪΫάέήίΰαβγδεζηθικλμνξοπρςστυφχψωϊϋόύώ")
+                   [c - ' '];
+            }
+          when CSET_ISO_Hebrew:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" ￿¢£¤¥¦§¨©×«¬­®¯°±²³´µ¶·¸¹÷»¼½¾￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿‗אבגדהוזחטיךכלםמןנסעףפץצקרשת￿￿‎‏")
+                   [c - ' '];
+            }
+          when CSET_ISO_Latin_5:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏĞÑÒÓÔÕÖ×ØÙÚÛÜİŞßàáâãäåæçèéêëìíîïğñòóôõö÷øùúûüışÿ")
+                   [c - ' '];
+            }
+          when CSET_DEC_Greek_Supp:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" ¡¢£￿¥￿§¤©ª«￿￿￿￿°±²³￿µ¶·￿¹º»¼½￿¿ϊΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟ￿ΠΡΣΤΥΦΧΨΩάέήί￿όϋαβγδεζηθικλμνξο￿πρστυφχψωςύώ΄￿")
+                   [c - ' '];
+            }
+          when CSET_DEC_Hebrew_Supp:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" ¡¢£￿¥￿§¨©×«￿￿￿￿°±²³￿µ¶·￿¹÷»¼½￿¿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿￿אבגדהוזחטיךכלםמןנסעףפץצקרשת￿￿￿￿")
+                   [c - ' '];
+            }
+          when CSET_DEC_Turkish_Supp:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" ¡¢£￿¥￿§¨©ª«￿￿İ￿°±²³￿µ¶·￿¹º»¼½ı¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏĞÑÒÓÔÕÖŒØÙÚÛÜŸŞßàáâãäåæçèéêëìíîïğñòóôõöœøùúûüÿş")
+                   [c - ' '];
+            }
+          when CSET_NRCS_Greek:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`ΑΒΓΔΕΖΗΘΙΚΛΜΝΧΟΠΡΣΤΥΦΞΨΩ￿￿{|}~")
+                   [c - ' '];
+            }
+          when CSET_NRCS_Hebrew:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_אבגדהוזחטיךכלםמןנסעףפץצקרשת{|}~")
+                   [c - ' '];
+            }
+          when CSET_NRCS_Turkish:
+            if (c >= ' ' && c <= 0x7F) {
+              wc = W(" !\"#$%ğ'()*+,-./0123456789:;<=>?İABCDEFGHIJKLMNOPQRSTUVWXYZŞÖÇÜ_Ğabcdefghijklmnopqrstuvwxyzşöçü")
+                   [c - ' '];
             }
           otherwise: ;
         }
@@ -2745,6 +2782,15 @@ term_write(const char *buf, uint len)
           when 'R':  /* Linux palette reset */
             win_reset_colours();
             term.state = NORMAL;
+          when 'I':  /* OSC set icon file (dtterm, shelltool) */
+            term.cmd_num = 7773;
+            term.state = OSC_NUM;
+          when 'L':  /* OSC set icon label (dtterm, shelltool) */
+            term.cmd_num = 1;
+            term.state = OSC_NUM;
+          when 'l':  /* OSC set window title (dtterm, shelltool) */
+            term.cmd_num = 2;
+            term.state = OSC_NUM;
           when '0' ... '9':  /* OSC command number */
             term.cmd_num = c - '0';
             term.state = OSC_NUM;
@@ -2937,5 +2983,51 @@ term_write(const char *buf, uint len)
     printer_write(term.printbuf, term.printbuf_pos);
     term.printbuf_pos = 0;
   }
+}
+
+/* Empty the input buffer */
+void
+term_flush(void)
+{
+  if (term.suspbuf) {
+    term_do_write(term.suspbuf, term.suspbuf_pos);
+    free(term.suspbuf);
+    term.suspbuf = 0;
+    term.suspbuf_pos = 0;
+    term.suspbuf_size = 0;
+  }
+}
+
+void
+term_write(const char *buf, uint len)
+{
+ /*
+    During drag-selects, we do not wish to process terminal output,
+    because the user will want the screen to hold still to be selected.
+    Therefore, we maintain a suspend-output-on-selection buffer which 
+    can grow up to a moderate size.
+  */
+  if (term_selecting()) {
+#define suspmax 88800
+#define suspdelta 888
+    // if buffer size would be exceeded, flush; prevent uint overflow
+    if (len > suspmax - term.suspbuf_pos)
+      term_flush();
+    // if buffer length does not exceed max size, append output
+    if (len <= suspmax - term.suspbuf_pos) {
+      // make sure buffer is large enough
+      if (term.suspbuf_pos + len > term.suspbuf_size) {
+        term.suspbuf_size += suspdelta;
+        term.suspbuf = renewn(term.suspbuf, term.suspbuf_size);
+      }
+      memcpy(term.suspbuf + term.suspbuf_pos, buf, len);
+      term.suspbuf_pos += len;
+      return;
+    }
+    // if we cannot buffer, output directly;
+    // in this case, we've either flushed already or didn't need to
+  }
+
+  term_do_write(buf, len);
 }
 

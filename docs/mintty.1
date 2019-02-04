@@ -456,7 +456,7 @@ can be configured with \fBHoverColour\fP.
 
 The font size can be increased or decreased using the keyboard shortcuts
 \fBCtrl+(keypad-)plus\fP and \fBCtrl+(keypad-)minus\fP, 
-or by holding \fBCtrl\fP while rolling the mousewheel.
+or by holding \fBCtrl\fP while rolling the mouse wheel.
 \fBCtrl+zero\fP or \fBCtrl+middle-mouse click\fP returns the font size 
 to the default.
 .br
@@ -1426,6 +1426,13 @@ The RowSpacing value is added to that.
 (Corresponds roughly to the xterm resource \fBscaleHeight\fP.)
 
 .TP
+\fBLigatures support\fP (LigaturesSupport=0)
+By default, ligatures, as supported by the selected font, are rendered 
+if they are output to the terminal in one chunk. When this option is 
+set =1, mintty redisplays the left part of the line whenever a character 
+is output, so ligatures are also supported while being input.
+
+.TP
 \fB\fP(ColSpacing=0)
 Additional column padding; ColSpacing=1 can avoid boldened glyphs being clipped.
 
@@ -1665,6 +1672,20 @@ See \fIhttp://invisible-island.net/xterm/ctlseqs/ctlseqs.txt\fP
 for a full listing of escape control sequences.
 .RE
 
+.TP
+\fBSuppress mouse wheel\fP (SuppressMouseWheel=)
+With this setting, certain effects of mouse wheel rolling can be disabled.
+The option is a list of action tags:
+.RS
+\(en \fBscrollwin\fP do not mouse-scroll the scrollback buffer (scrollbar not affected)
+.br
+\(en \fBscrollapp\fP do not simulate scrolling in applications by sending cursor escape sequences
+.br
+\(en \fBzoom\fP do not mouse-zoom font size (same as ZoomMouse=no)
+.br
+\(en \fBreport\fP do not report mouse wheel events in application mouse modes
+.RE
+
 .SS Command line
 The settings here are config file versions of command line options
 described in the OPTIONS section.  They do not appear in the options dialog.
@@ -1778,6 +1799,12 @@ options, which means they can only be set in config files or using the
 .TP
 \fBClear selection highlighting on input\fP (ClearSelectionOnInput=true)
 When this is disabled, keyboard input or pasting does not clear selection highlighting.
+
+.TP
+\fBTrim trailing space from selection on copy\fP (TrimSelection=true)
+When this is disabled, trailing space that was written to the terminal 
+in a line is included in the selection buffer.
+(Corresponds to the xterm resource \fBtrimSelection\fP.)
 
 .TP
 \fBSelection size indication\fP (SelectionShowSize=0)
@@ -2006,6 +2033,8 @@ pairs of key and action descriptors
 (if a semicolon shall be embedded into any of the action descriptors, 
 a non-whitespace control character (i.e. none of \fB^I^J^K^L^M\fP) can be 
 specified as an alternative separator by starting the whole setting with it).
+The definition list can be split over multiple lines if a separator is 
+followed by a backslash, newline, and optional whitespace indentation.
 .br
 (Corresponds roughly to the xterm resource \fBtranslations\fP.)
 
@@ -2340,6 +2369,8 @@ actual clipboard contents replaced for a "%s".
 If a semicolon shall be embedded into any of the drop patterns, 
 a non-whitespace control character (i.e. none of \fB^I^J^K^L^M\fP) can be 
 specified as an alternative separator by starting the whole setting with it.
+The definition list can be split over multiple lines if a separator is 
+followed by a backslash, newline, and optional whitespace indentation.
 
 \fINote:\fP This is an experimental feature, with an experimental configuration format.
 
@@ -2373,6 +2404,8 @@ if enabled.
 If a semicolon shall be embedded into any of the command patterns, 
 a non-whitespace control character (i.e. none of \fB^I^J^K^L^M\fP) can be 
 specified as an alternative separator by starting the whole setting with it.
+The definition list can be split over multiple lines if a separator is 
+followed by a backslash, newline, and optional whitespace indentation.
 
 Mintty provides useful information in environment variables:
 .br
@@ -2426,6 +2459,8 @@ mintty is invoked with the respective parameters.
 (If a semicolon shall be embedded into any of the command patterns, 
 a non-whitespace control character (i.e. none of \fB^I^J^K^L^M\fP) can be 
 specified as an alternative separator by starting the whole setting with it.)
+The definition list can be split over multiple lines if a separator is 
+followed by a backslash, newline, and optional whitespace indentation.
 
 \fINote:\fP Session launch names are subject to localization if they are 
 added to the localization file of the selected UI localization language 
@@ -2452,6 +2487,8 @@ mintty is invoked with the respective parameters.
 (If a semicolon shall be embedded into any of the command patterns, 
 a non-whitespace control character (i.e. none of \fB^I^J^K^L^M\fP) can be 
 specified as an alternative separator by starting the whole setting with it.)
+The definition list can be split over multiple lines if a separator is 
+followed by a backslash, newline, and optional whitespace indentation.
 
 \fINote:\fP This feature only works in combination with a parameter 
 \fB-o AppID=...\fP. If the taskbar icon is "pinned" to the taskbar, 

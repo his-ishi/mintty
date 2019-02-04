@@ -155,8 +155,10 @@ const config default_cfg = {
   .suppress_win = "",
   .suppress_osc = "",
   .suppress_nrc = "",  // unused
+  .suppress_wheel = "",
   .filter_paste = "",
   .input_clears_selection = true,
+  .trim_selection = true,
   .charwidth = 0,
   .emojis = 0,
   .emoji_placement = 0,
@@ -176,6 +178,7 @@ const config default_cfg = {
   .col_spacing = 0,
   .row_spacing = 0,
   .padding = 1,
+  .ligatures_support = 0,
   .handle_dpichanged = true,
   .check_version_update = 900,
   .word_chars = "",
@@ -316,7 +319,7 @@ options[] = {
   {"Key_ScrollLock", OPT_STRING, offcfg(key_scrlock)},
   {"Break", OPT_STRING | OPT_LEGACY, offcfg(key_break)},
   {"Pause", OPT_STRING | OPT_LEGACY, offcfg(key_pause)},
-  {"KeyFunctions", OPT_WSTRING, offcfg(key_commands)},
+  {"KeyFunctions", OPT_WSTRING | OPT_KEEPCR, offcfg(key_commands)},
 
   // Mouse
   {"CopyOnSelect", OPT_BOOL, offcfg(copy_on_select)},
@@ -382,8 +385,10 @@ options[] = {
   {"SuppressWIN", OPT_STRING, offcfg(suppress_win)},
   {"SuppressOSC", OPT_STRING, offcfg(suppress_osc)},
   {"SuppressNRC", OPT_STRING, offcfg(suppress_nrc)},  // unused
+  {"SuppressMouseWheel", OPT_STRING, offcfg(suppress_wheel)},
   {"FilterPasteControls", OPT_STRING, offcfg(filter_paste)},
   {"ClearSelectionOnInput", OPT_BOOL, offcfg(input_clears_selection)},
+  {"TrimSelection", OPT_BOOL, offcfg(trim_selection)},
   {"Charwidth", OPT_CHARWIDTH, offcfg(charwidth)},
   {"Emojis", OPT_EMOJIS, offcfg(emojis)},
   {"EmojiPlacement", OPT_EMOJI_PLACEMENT, offcfg(emoji_placement)},
@@ -403,6 +408,7 @@ options[] = {
   {"ColSpacing", OPT_INT, offcfg(col_spacing)},
   {"RowSpacing", OPT_INT, offcfg(row_spacing)},
   {"Padding", OPT_INT, offcfg(padding)},
+  {"LigaturesSupport", OPT_INT, offcfg(ligatures_support)},
   {"HandleDPI", OPT_BOOL, offcfg(handle_dpichanged)},
   {"CheckVersionUpdate", OPT_INT, offcfg(check_version_update)},
   {"WordChars", OPT_STRING, offcfg(word_chars)},
@@ -1264,28 +1270,36 @@ load_config(string filename, int to_save)
   if (file) {
     while (fgets(linebuf, sizeof linebuf, file)) {
       char * lbuf = linebuf;
-      while (!strchr(lbuf, '\n')) {
+      int len;
+      while (len = strlen(lbuf),
+             (len && lbuf[len - 1] != '\n') ||
+             (len > 1 && lbuf[len - 1] == '\n' && lbuf[len - 2] == '\\')
+            )
+      {
         if (lbuf == linebuf) {
           // make lbuf dynamic
           lbuf = strdup(lbuf);
         }
         // append to lbuf
-        int len = strlen(lbuf);
+        len = strlen(lbuf);
         lbuf = renewn(lbuf, len + sizeof linebuf);
         if (!fgets(&lbuf[len], sizeof linebuf, file))
           break;
       }
 
-      //lbuf[strcspn(lbuf, "\r\n")] = 0;  /* trim newline */
-      // trim newline but allow embedded CR (esp. for DropCommands)
-      lbuf[strcspn(lbuf, "\n")] = 0;
-      // preserve comment lines and empty lines
+      if (lbuf[len - 1] == '\n')
+        lbuf[len - 1] = 0;
+      //printf("option <%s>\n", lbuf);
+
       if (lbuf[0] == '#' || lbuf[0] == '\0') {
+        // preserve comment lines and empty lines
         if (to_save)
           remember_file_comment(lbuf);
       }
       else {
+        // apply config options
         int i = parse_option(lbuf, true);
+        // remember config options for saving
         if (to_save) {
           if (i >= 0)
             remember_file_option("load", i);

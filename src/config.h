@@ -154,8 +154,10 @@ typedef struct {
   string suppress_win;
   string suppress_osc;
   string suppress_nrc;
+  string suppress_wheel;
   string filter_paste;
   bool input_clears_selection;
+  bool trim_selection;
   char charwidth;
   char emojis;
   char emoji_placement;
@@ -174,6 +176,7 @@ typedef struct {
   int geom_sync;
   int col_spacing, row_spacing;
   int padding;
+  int ligatures_support;
   int handle_dpichanged;
   int check_version_update;
   string word_chars;
