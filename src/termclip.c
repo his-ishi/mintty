@@ -380,7 +380,7 @@ term_get_text(bool all, bool screen, bool command)
 }
 
 void
-term_cmd(char * cmdpat)
+term_cmd(char * cmd)
 {
   // provide scrollback buffer
   wchar * wsel = term_get_text(true, false, false);
@@ -411,37 +411,25 @@ term_cmd(char * cmdpat)
   setenv("MINTTY_TITLE", ttl, true);
   free(ttl);
 
-#ifdef use_placeholders
-  sel = 0;
-  if (strstr(cmdpat, "%s") || strstr(cmdpat, "%1$s")) {
-    wchar * wsel = term_get_text(false, false, false);
-    sel = cs__wcstombs(wsel);
-    free(wsel);
+  char * path0 = 0;
+  char * path1 = 0;
+  if (*cfg.user_commands_path) {
+    path0 = getenv("PATH");
+    path1 = cs__wcstombs(cfg.user_commands_path);
+    char * ph = strstr(path1, "%s");
+    if (ph && !strchr(ph + 1, '%')) {
+      char * path2 = asform(path1, path0);
+      free(path1);
+      path1 = path2;
+    }
+    setenv("PATH", path1, true);
   }
-
-  int len = strlen(cmdpat) + (sel ? strlen(sel) : 0) + 1;
-  char * cmd = newn(char, len);
-  sprintf(cmd, cmdpat, sel ?: "");
-  if (sel)
-    free(sel);
-#else
-  char * cmd = cmdpat;
-#endif
-
-  char * path0 = getenv("PATH");
-  char * path1 = strdup("/bin:");
-  path1 = renewn(path1, strlen(path1) + strlen(path0) + 1);
-  strcat(path1, path0);
-  setenv("PATH", path1, true);
   FILE * cmdf = popen(cmd, "r");
   unsetenv("MINTTY_TITLE");
   unsetenv("MINTTY_OUTPUT");
   unsetenv("MINTTY_SCREEN");
   unsetenv("MINTTY_SELECT");
   unsetenv("MINTTY_BUFFER");
-  unsetenv("MINTTY_CWD");
-  unsetenv("MINTTY_PID");
-  unsetenv("MINTTY_PROG");
   if (cmdf) {
     if (term.bracketed_paste)
       child_write("\e[200~", 6);
@@ -453,7 +441,10 @@ term_cmd(char * cmdpat)
     if (term.bracketed_paste)
       child_write("\e[201~", 6);
   }
-  free(path1);
+  if (path0)
+    setenv("PATH", path0, true);
+  if (path1)
+    free(path1);
 }
 
 #include <time.h>
@@ -713,6 +704,7 @@ term_create_html(FILE * hf, int level)
       void add_color(char * pre, int col) {
         colour ansii = win_get_colour(ANSI0 + col);
         uchar r = red(ansii), g = green(ansii), b = blue(ansii);
+        add_style("");
         hprintf(hf, "%scolor: #%02X%02X%02X;", pre, r, g, b);
       }
 

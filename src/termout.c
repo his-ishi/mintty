@@ -1,5 +1,5 @@
 // termout.c (part of mintty)
-// Copyright 2008-12 Andy Koppe, 2017 Thomas Wolff
+// Copyright 2008-12 Andy Koppe, 2017-19 Thomas Wolff
 // Adapted from code from PuTTY-0.60 by Simon Tatham and team.
 // Licensed under the terms of the GNU General Public License v3 or later.
 
@@ -365,6 +365,11 @@ write_char(wchar c, int width)
           line->chars[x].chr = pc;
         else
           add_cc(line, x, c, curs->attr);
+      }
+      else {
+        // add initial combining characters, 
+        // particularly to include initial bidi directional markers
+        add_cc(line, -1, c, curs->attr);
       }
       return;
     otherwise:  // Anything else. Probably shouldn't get here.
@@ -2512,6 +2517,12 @@ term_do_write(const char *buf, uint len)
 
         if (hwc) // Previous high surrogate not followed by low one
           write_error();
+
+        // ASCII shortcut for some speedup (~5%), earliest applied here
+        if (wc >= ' ' && wc <= 0x7E && cset == CSET_ASCII) {
+          write_char(wc, 1);
+          continue;
+        }
 
         if (is_high_surrogate(wc)) {
           term.high_surrogate = wc;

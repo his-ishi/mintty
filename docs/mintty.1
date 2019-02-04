@@ -882,7 +882,8 @@ command-line.)
 Unicode-enabled settings: BellFile, ThemeFile, Background, Title, ExitTitle, Icon, Log, 
 Language, Font, Font1..., FontSample, Printer, Answerback, SixelClipChars, 
 Class, AppID, AppName, AppLaunchCmd, 
-DropCommands, UserCommands, SessionCommands, TaskCommands, KeyFunctions.
+DropCommands, UserCommands, SessionCommands, TaskCommands, 
+KeyFunctions, SysMenuFunctions, CtxMenuFunctions, UserCommandsPath.
 
 Be careful when running multiple instances of mintty. If options are saved 
 from different instances, or the config file is edited manually, 
@@ -1259,6 +1260,13 @@ allowed to detect a Ctrl+Menu sequence as AltGr.
 Setting this hidden option would disable a workaround for an 
 incompatibility in the Windows on-screen keyboard, 
 just in case is has any side effects.
+
+.TP
+\fBSupport injection of external hotkeys\fP (SupportExternalHotkeys=2)
+This setting supports external Alt+hotkey combinations, esp. Alt+F4 
+to close the window, independently of general Alt+Fn shortcuts support 
+(if option value is 2) and by fixing the buggy hotkey sequence sent 
+by StrokeIt.
 
 .TP
 \fBCopy and Paste shortcuts\fP (ClipShortcuts=yes)
@@ -1832,14 +1840,24 @@ window manager is used.
 
 .TP
 \fBWindow class name\fP (Class=mintty)
-The \fBClass\fP setting determines the name of the window class of the terminal
-window.  This can be used to help Windows scripting tools such as AutoHotKey to
-distinguish different mintty windows.  The name defaults to "mintty".
+The \fBClass\fP setting determines the name of the window class of the terminal window.
+It can be used to distinguish or group different mintty windows, e.g. for 
+the mintty session switcher, or for Windows scripting tools such as AutoHotKey.
+
+For a flexible grouping configuration, the Class option supports the 
+same \fB%s\fP placeholder parameters as the AppID option.
 
 .SS "Hidden" settings
 The following settings appear neither in the options dialog nor as command line
 options, which means they can only be set in config files or using the
 \fB--option\fP or \fB-o\fP command line option.
+
+.TP
+\fBAccelerate display speed\fP (DisplaySpeedup=6)
+If mintty processes high volume of output, it will skip up to the given 
+number of refresh intervals (of 16ms each) in order to save output that 
+is visually scrolled off right away, so effectively increasing output speed.
+The maximum value is 9.
 
 .TP
 \fBClear selection highlighting on input\fP (ClearSelectionOnInput=true)
@@ -1973,18 +1991,28 @@ from the WSL system name, in order to achieve WSL distribution-specific
 taskbar grouping. This resolves taskbar grouping problems in some cases 
 (wsltty issue #96) but causes similar problems in other cases (issue #784).
 
-\fIWarning:\fP Using this option in a Windows desktop shortcut may 
+\fIWarning:\fP Using this option for a mintty window started from 
+a Windows shortcut (desktop, taskbar, start menu) may 
 cause trouble with taskbar grouping behaviour. If you need to do that, 
 the shortcut itself should also get attached with the same AppId.
+
+\fINote:\fP Since 2.9.6, if mintty is started via a Windows shortcut 
+which has its own AppID, it is reused for the new mintty window in order 
+to achieve proper taskbar icon grouping. This takes precedence over an 
+explicit setting of the AppID option.
 
 \fIExplanation:\fP Note that Windows shortcut files have their own AppID.
 Hence, if an AppID is specified in the mintty settings, but not on a 
 taskbar-pinned shortcut for invoking mintty, clicking the pinned 
 shortcut will result in a separate taskbar item for the new mintty window, 
 rather than being grouped with the shortcut.
-To avoid this, the shortcut's AppID has to be set to the same string, 
-which can be done using the \fBWin7AppId\fP utility available cloned in 
+
+\fIHint:\fP To avoid AppID inconsistence and thus ungrouped taskbar icons,
+the shortcut's AppID should to be set to the same string as the mintty AppID, 
+which can be done using the \fBwinappid\fP utility available in 
 the mintty utils repository \fIhttps://github.com/mintty/utils\fP.
+As noted above, since mintty 2.9.6, the mintty AppID does not need to be set 
+anymore in this case.
 
 .TP
 \fBApplication Taskbar Shortcut Title\fP (AppName=)
@@ -2161,7 +2189,7 @@ Supported actions are described as follows:
 .br
 \(en \fB"string"\fP or \fB'string'\fP: enters the literal string
 .br
-\(en \fB`command`\fP: enters the output of the command
+\(en \fB`command` (**)\fP: enters the output of the command
 .br
 \(en \fBfullscreen (*)\fP: switches to fullscreen mode
 .br
@@ -2171,11 +2199,15 @@ Supported actions are described as follows:
 .br
 \(en \fBwin-restore\fP: resizes to normal size
 .br
+\(en \fBwin-toggle-max\fP: toggles maximized / normal size
+.br
 \(en \fBwin-icon\fP: turns window into icon
 .br
 \(en \fBclose\fP: closes terminal window
 .br
-\(en \fBnew\fP: opens a new terminal window when key is released
+\(en \fBnew-key\fP: opens a new terminal window when key is released
+.br
+\(en \fBnew-window\fP: opens a new terminal window
 .br
 \(en \fBoptions\fP: opens the Options dialog
 .br
@@ -2185,7 +2217,7 @@ Supported actions are described as follows:
 .br
 \(en \fBsearch\fP: opens the search bar
 .br
-\(en \fBdefault-size (*)\fP: switches to default window size
+\(en \fBdefault-size (*)\fP: switches to default terminal size
 .br
 \(en \fBscrollbar-outer\fP: toggles the scrollbar (xterm compatible)
 .br
@@ -2219,6 +2251,8 @@ Supported actions are described as follows:
 .br
 \(en \fBcopy-title\fP: copies the window title to the clipboard
 .br
+\(en \fBlock-title\fP: locks the window title from being changed
+.br
 \(en \fBreset\fP: resets the terminal
 .br
 \(en \fBbreak\fP: sends a break condition to the application
@@ -2238,7 +2272,13 @@ Supported actions are described as follows:
 \(en \fBvoid\fP: do nothing
 
 \fINote (*):\fP The exact behaviour of some actions depends on the 
-Shift state as being mapped from.
+state of the Shift key.
+
+\fINote (**):\fP For external commands as key functions, the same 
+additional functionality is provided as for context menu user commands 
+(option \fBUserCommands\fP): environment variables and PATH substitution;
+the PATH environment for the external command can be set up 
+with option \fBUserCommandsPath\fP.
 
 \fINote:\fP To just disable the built-in shortcut (and not override it 
 with a user-defined one), but further process the key as normal input, 
@@ -2476,7 +2516,7 @@ command invocations depending on file name pattern are desired, this should
 be handled by a suitable cooperating shell function.
 
 .TP
-\fBUser commands\fP (UserCommands=)
+\fBUser commands\fP (UserCommands=) [DEPRECATED, see \fBCtxMenuFunctions\fP]
 This setting lists user-defined commands for the extended context menu.
 The value is a series of semicolon-separated, colon-combined 
 pairs of menu item label and command pattern; the command is invoked and its 
@@ -2510,9 +2550,15 @@ MINTTY_CWD for the current working directory of the foreground process
 added to the localization file of the selected UI localization language 
 (in subdirectory \fIlang\fP of a mintty resource directory).
 
+\fINote:\fP Menu item labels can contain a \fB&\fP sign to indicate a 
+key shortcut for menu item selection.
+
 \fINote:\fP The previous command can be detected if prompt lines are marked 
 with the escape sequence ^[[?7711h.
 See the Control Sequences wiki page \fIhttps://github.com/mintty/mintty/wiki/CtrlSeqs#scroll-markers\fP.
+
+\fINote:\fP The PATH environment for the external command can be set up 
+with option \fBUserCommandsPath\fP.
 
 \fINote:\fP This is an experimental feature, with an experimental configuration format.
 
@@ -2531,6 +2577,62 @@ Examples:
 \(en \fBUserCommands=google:cygstart https://www.google.de/search?q="$MINTTY_SELECT"\fP
 
 \fINote:\fP Control characters need to be embedded verbatim; there is no escape notation.
+
+.TP
+\fBUser commands PATH expansion\fP (UserCommandsPath=/bin:%s)
+This setting defines the PATH environment for user-defined external commands,
+applicable to extended context menu commands (UserCommands=...:...)
+and key-attached external commands (KeyFunctions=...:`...`).
+If the value contains a single \fB%s\fP placeholder, the current 
+environment PATH is substituted for it.
+
+.TP
+\fBSystem menu user commands\fP (CtxMenuFunctions=)
+This setting lists user-defined functions or commands for the context menus 
+(right mouse click in text area).
+If it is configured, it is by default included in the extended context menu 
+(Control+right-click) but can be configured for other context menu 
+invocations as well (see configuration of \fIMenu contents\fP with options 
+\fBMenu*\fP), along with the deprecated configured user commands (\fBUserCommands\fP).
+
+The value is a series of semicolon-separated, colon-combined 
+pairs of key and action descriptors
+(if a semicolon shall be embedded into any of the action descriptors, 
+a non-whitespace control character (i.e. none of \fB^I^J^K^L^M\fP) can be 
+specified as an alternative separator by starting the whole setting with it).
+The definition list can be split over multiple lines if a separator is 
+followed by a backslash, newline, and optional whitespace indentation.
+
+The configuration is similar to the \fBUserCommands\fP setting with respect 
+to menu labels, and to \fBKeyFunctions\fP setting with respect to function 
+designations; respective notes and warnings apply.
+
+.TP
+\fBSystem menu user commands\fP (SysMenuFunctions=)
+This setting lists user-defined functions or commands for the system menu 
+(right mouse click on title bar or left click on title bar icon).
+If it is configured, the middle items of the menu (including Options... 
+and New) are replaced by the configured functions.
+
+The value is a series of semicolon-separated, colon-combined 
+pairs of key and action descriptors
+(if a semicolon shall be embedded into any of the action descriptors, 
+a non-whitespace control character (i.e. none of \fB^I^J^K^L^M\fP) can be 
+specified as an alternative separator by starting the whole setting with it).
+The definition list can be split over multiple lines if a separator is 
+followed by a backslash, newline, and optional whitespace indentation.
+
+The configuration is similar to the \fBUserCommands\fP setting with respect 
+to menu labels, and to \fBKeyFunctions\fP setting with respect to function 
+designations; respective notes and warnings apply.
+\fINote:\fP To include default items and keep their language localization 
+enabled, their label strings need to be reproduced exactly as registered 
+in the localization pattern file \fBmessages.pot\fP, including the position 
+of a \fB&\fP marker which indicates a key shortcut for menu item selection.
+
+Examples:
+.br
+\(en \fBSysMenuFunctions=&Lock Title:lock-title;Copy &Title:copy-title;&Options...:options;Ne&w:new-window\fP
 
 .TP
 \fBSession launcher commands\fP (SessionCommands=)
@@ -2626,7 +2728,7 @@ Menu contents can be configured by a sequence of characters with the following m
 .br
 \(en \fBe\fP: extended context menu with user commands (if configured)
 .br
-\(en \fBu\fP: user commands
+\(en \fBu\fP: user commands (\fBCtxMenuFunctions\fP, \fBUserCommands\fP)
 .br
 \(en \fBl\fP: session launcher
 .br

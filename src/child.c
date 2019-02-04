@@ -610,6 +610,9 @@ grandchild_process_list(void)
   }
   closedir(d);
 
+  DWORD win_version = GetVersion();
+  win_version = ((win_version & 0xff) << 8) | ((win_version >> 8) & 0xff);
+
   wchar * res = 0;
   for (uint i = 0; i < nttyprocs; i++) {
     char * proc = newn(char, 50 + strlen(ttyprocs[i].cmdline));
@@ -617,19 +620,29 @@ grandchild_process_list(void)
     free(ttyprocs[i].cmdline);
     wchar * procw = cs__mbstowcs(proc);
     free(proc);
-    for (int i = 0; i < 13; i++)
-      if (procw[i] == ' ')
-        procw[i] = 0x2007;  // FIGURE SPACE
+    if (win_version >= 0x0601)
+      for (int i = 0; i < 13; i++)
+        if (procw[i] == ' ')
+          procw[i] = 0x2007;  // FIGURE SPACE
     int wid = min(wcslen(procw), 40);
     for (int i = 13; i < wid; i++)
       if ((cfg.charwidth ? xcwidth(procw[i]) : wcwidth(procw[i])) == 2)
         wid--;
     procw[wid] = 0;
 
-    if (!res)
-      res = wcsdup(W("╎ WPID   PID  COMMAND\n"));  // ┆┇┊┋╎╏
-    res = renewn(res, wcslen(res) + wcslen(procw) + 3);
-    wcscat(res, W("╎"));
+    if (win_version >= 0x0601) {
+      if (!res)
+        res = wcsdup(W("╎ WPID   PID  COMMAND\n"));  // ┆┇┊┋╎╏
+      res = renewn(res, wcslen(res) + wcslen(procw) + 3);
+      wcscat(res, W("╎"));
+    }
+    else {
+      if (!res)
+        res = wcsdup(W("| WPID   PID  COMMAND\n"));  // ┆┇┊┋╎╏
+      res = renewn(res, wcslen(res) + wcslen(procw) + 3);
+      wcscat(res, W("|"));
+    }
+
     wcscat(res, procw);
     wcscat(res, W("\n"));
     free(procw);
@@ -765,10 +778,10 @@ foreground_prog()
 }
 
 void
-user_command(int n)
+user_command(wstring commands, int n)
 {
-  if (*cfg.user_commands) {
-    char * cmds = cs__wcstombs(cfg.user_commands);
+  if (*commands) {
+    char * cmds = cs__wcstombs(commands);
     char * cmdp = cmds;
     char sepch = ';';
     if ((uchar)*cmdp <= (uchar)' ')
@@ -802,6 +815,9 @@ user_command(int n)
           free(fgd);
         }
         term_cmd(progp);
+        unsetenv("MINTTY_CWD");
+        unsetenv("MINTTY_PROG");
+        unsetenv("MINTTY_PID");
         break;
       }
       n--;

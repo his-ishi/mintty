@@ -1059,6 +1059,8 @@ term_do_scroll(int topline, int botline, int lines, bool sb)
   bool down = lines < 0; // Scrolling downwards?
   lines = abs(lines);    // Number of lines to scroll by
 
+  lines_scrolled += lines;
+
   botline++; // One below the scroll region: easier to calculate with
 
   // Don't try to scroll more than the number of lines in the scroll region.
@@ -1225,6 +1227,8 @@ term_erase(bool selective, bool line_only, bool from_begin, bool to_end)
       {
         line->chars[start.x] = term.erase_char;
         line->chars[start.x].attr.attr |= TATTR_CLEAR;
+        if (!start.x)
+          clear_cc(line, -1);
       }
       if (inclpos(start, cols) && start.y < term.rows)
         line = term.lines[start.y];
