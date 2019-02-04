@@ -80,6 +80,7 @@ const config default_cfg = {
   .backspace_sends_bs = CERASE == '\b',
   .delete_sends_del = false,
   .ctrl_alt_is_altgr = false,
+  .ctrl_alt_delay_altgr = 0,
   .old_altgr_detection = false,
   .clip_shortcuts = true,
   .window_shortcuts = true,
@@ -96,6 +97,7 @@ const config default_cfg = {
   .key_break = "",	// VK_CANCEL
   .key_menu = "",	// VK_APPS
   .key_scrlock = "",	// VK_SCROLL
+  .key_commands = W(""),
   // Mouse
   .copy_on_select = true,
   .copy_as_rtf = true,
@@ -107,6 +109,7 @@ const config default_cfg = {
   .clicks_target_app = true,
   .click_target_mod = MDK_SHIFT,
   .hide_mouse = true,
+  .elastic_mouse = false,
   // Window
   .cols = 80,
   .rows = 24,
@@ -147,6 +150,12 @@ const config default_cfg = {
   // "Hidden"
   .bidi = 2,
   .disable_alternate_screen = false,
+  .suppress_sgr = "",
+  .suppress_dec = "",
+  .suppress_win = "",
+  .suppress_osc = "",
+  .suppress_nrc = "",  // unused
+  .filter_paste = "",
   .input_clears_selection = true,
   .charwidth = 0,
   .emojis = 0,
@@ -288,6 +297,7 @@ options[] = {
   {"BackspaceSendsBS", OPT_BOOL, offcfg(backspace_sends_bs)},
   {"DeleteSendsDEL", OPT_BOOL, offcfg(delete_sends_del)},
   {"CtrlAltIsAltGr", OPT_BOOL, offcfg(ctrl_alt_is_altgr)},
+  {"CtrlAltDelayAltGr", OPT_INT, offcfg(ctrl_alt_delay_altgr)},
   {"OldAltGrDetection", OPT_BOOL, offcfg(old_altgr_detection)},
   {"ClipShortcuts", OPT_BOOL, offcfg(clip_shortcuts)},
   {"WindowShortcuts", OPT_BOOL, offcfg(window_shortcuts)},
@@ -306,6 +316,7 @@ options[] = {
   {"Key_ScrollLock", OPT_STRING, offcfg(key_scrlock)},
   {"Break", OPT_STRING | OPT_LEGACY, offcfg(key_break)},
   {"Pause", OPT_STRING | OPT_LEGACY, offcfg(key_pause)},
+  {"KeyFunctions", OPT_WSTRING, offcfg(key_commands)},
 
   // Mouse
   {"CopyOnSelect", OPT_BOOL, offcfg(copy_on_select)},
@@ -318,6 +329,7 @@ options[] = {
   {"ClicksTargetApp", OPT_BOOL, offcfg(clicks_target_app)},
   {"ClickTargetMod", OPT_MOD, offcfg(click_target_mod)},
   {"HideMouse", OPT_BOOL, offcfg(hide_mouse)},
+  {"ElasticMouse", OPT_BOOL, offcfg(elastic_mouse)},
 
   // Window
   {"Columns", OPT_INT, offcfg(cols)},
@@ -365,6 +377,12 @@ options[] = {
   // "Hidden"
   {"Bidi", OPT_INT, offcfg(bidi)},
   {"NoAltScreen", OPT_BOOL, offcfg(disable_alternate_screen)},
+  {"SuppressSGR", OPT_STRING, offcfg(suppress_sgr)},
+  {"SuppressDEC", OPT_STRING, offcfg(suppress_dec)},
+  {"SuppressWIN", OPT_STRING, offcfg(suppress_win)},
+  {"SuppressOSC", OPT_STRING, offcfg(suppress_osc)},
+  {"SuppressNRC", OPT_STRING, offcfg(suppress_nrc)},  // unused
+  {"FilterPasteControls", OPT_STRING, offcfg(filter_paste)},
   {"ClearSelectionOnInput", OPT_BOOL, offcfg(input_clears_selection)},
   {"Charwidth", OPT_CHARWIDTH, offcfg(charwidth)},
   {"Emojis", OPT_EMOJIS, offcfg(emojis)},

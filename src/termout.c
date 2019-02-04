@@ -283,6 +283,7 @@ write_char(wchar c, int width)
 
   if (curs->wrapnext && curs->autowrap && width > 0) {
     line->lattr |= LATTR_WRAPPED;
+    line->wrappos = curs->x;
     if (curs->y == term.marg_bot)
       term_do_scroll(term.marg_top, term.marg_bot, 1, true);
     else if (curs->y < term.rows - 1)
@@ -319,6 +320,7 @@ write_char(wchar c, int width)
       if (curs->x == term.cols - 1) {
         line->chars[curs->x] = term.erase_char;
         line->lattr |= LATTR_WRAPPED | LATTR_WRAPPED2;
+        line->wrappos = curs->x;
         if (curs->y == term.marg_bot)
           term_do_scroll(term.marg_top, term.marg_bot, 1, true);
         else if (curs->y < term.rows - 1)
@@ -378,9 +380,32 @@ write_char(wchar c, int width)
 static void
 write_error(void)
 {
-  // Write 'Medium Shade' character from vt100 linedraw set,
-  // which looks appropriately erroneous.
-  write_char(0x2592, 1);
+  // Write one of REPLACEMENT CHARACTER or, if that does not exist,
+  // MEDIUM SHADE which looks appropriately erroneous.
+  wchar errch = 0xFFFD;
+  win_check_glyphs(&errch, 1);
+  if (!errch)
+    errch = 0x2592;
+  write_char(errch, 1);
+}
+
+
+static bool
+contains(string s, int i)
+{
+  while (*s) {
+    while (*s == ',')
+      s++;
+    int si = -1;
+    int len;
+    sscanf(s, "%d%n", &si, &len);
+    if (len <= 0)
+      return false;
+    s += len;
+    if (si == i && (!*s || *s == ','))
+      return true;
+  }
+  return false;
 }
 
 /* Process control character, returning whether it has been recognised. */
@@ -636,6 +661,20 @@ do_sgr(void)
         else
           break;
       }
+    if (*cfg.suppress_sgr
+        && contains(cfg.suppress_sgr, term.csi_argv[i] & ~SUB_PARS))
+    {
+      // skip suppressed attribute (but keep processing sub_pars)
+      // but turn some sequences into virtual sub-parameters
+      // in order to get properly adjusted
+      if (term.csi_argv[i] == 38 || term.csi_argv[i] == 48) {
+        if (i + 2 < argc && term.csi_argv[i + 1] == 5)
+          sub_pars = 2;
+        else if (i + 4 < argc && term.csi_argv[i + 1] == 2)
+          sub_pars = 4;
+      }
+    }
+    else
     switch (term.csi_argv[i]) {
       when 0:
         attr = CATTR_DEFAULT;
@@ -881,11 +920,16 @@ static void
 set_modes(bool state)
 {
   for (uint i = 0; i < term.csi_argc; i++) {
-    int arg = term.csi_argv[i];
+    uint arg = term.csi_argv[i];
     if (term.esc_mod) { /* DECSET/DECRST: DEC private mode set/reset */
+      if (*cfg.suppress_dec && contains(cfg.suppress_dec, arg))
+        ; // skip suppressed DECSET/DECRST operation
+      else
       switch (arg) {
         when 1:  /* DECCKM: application cursor keys */
           term.app_cursor_keys = state;
+        when 66:  /* DECNKM: application keypad */
+          term.app_keypad = state;
         when 2:  /* DECANM: VT100/VT52 mode */
           if (state) {
             // Designate USASCII for character sets G0-G3
@@ -1058,6 +1102,7 @@ set_modes(bool state)
           term.echoing = !state;
         when 20: /* LNM: Return sends ... */
           term.newline_mode = state;
+#ifdef support_Wyse_cursor_modes
         when 33: /* WYSTCURM: steady Wyse cursor */
           term.cursor_blinks = !state;
           term.cursor_invalid = true;
@@ -1067,6 +1112,7 @@ set_modes(bool state)
           term.cursor_blinks = false;
           term.cursor_invalid = true;
           term_schedule_cblink();
+#endif
       }
     }
   }
@@ -1087,6 +1133,8 @@ get_mode(bool privatemode, int arg)
     switch (arg) {
       when 1:  /* DECCKM: application cursor keys */
         return 2 - term.app_cursor_keys;
+      when 66:  /* DECNKM: application keypad */
+        return 2 - term.app_keypad;
       when 2:  /* DECANM: VT100/VT52 mode */
         // Check USASCII for character sets G0-G3
         for (uint i = 0; i < lengthof(term.curs.csets); i++)
@@ -1197,6 +1245,7 @@ get_mode(bool privatemode, int arg)
         return 2 - term.echoing;
       when 20: /* LNM: Return sends ... */
         return 2 - term.newline_mode;
+#ifdef support_Wyse_cursor_modes
       when 33: /* WYSTCURM: steady Wyse cursor */
         return 2 - (!term.cursor_blinks);
       when 34: /* WYULCURM: Wyse underline cursor */
@@ -1204,6 +1253,7 @@ get_mode(bool privatemode, int arg)
           return 2 - (term.cursor_type == 1);
         else
           return 0;
+#endif
       otherwise:
         return 0;
     }
@@ -1245,6 +1295,39 @@ pop_mode(int mode)
   return -1;
 }
 
+struct cattr_entry {
+  cattr ca;
+  cattrflags mask;
+};
+static struct cattr_entry cattr_stack[10];
+static int cattr_stack_len = 0;
+
+static void
+push_attrs(cattr ca, cattrflags caflagsmask)
+{
+  if (cattr_stack_len == lengthof(cattr_stack)) {
+    for (int i = 1; i < cattr_stack_len; i++)
+      cattr_stack[i - 1] = cattr_stack[i];
+    cattr_stack_len--;
+  }
+  //printf("push_attrs[%d] %llX\n", cattr_stack_len, caflagsmask);
+  cattr_stack[cattr_stack_len].ca = ca;
+  cattr_stack[cattr_stack_len].mask = caflagsmask;
+  cattr_stack_len++;
+}
+
+static bool
+pop_attrs(cattr * _ca, cattrflags * _caflagsmask)
+{
+  if (!cattr_stack_len)
+    return false;
+  cattr_stack_len--;
+  //printf("pop_attrs[%d] %llX\n", cattr_stack_len, cattr_stack[cattr_stack_len].mask);
+  *_ca = cattr_stack[cattr_stack_len].ca;
+  *_caflagsmask = cattr_stack[cattr_stack_len].mask;
+  return true;
+}
+
 /*
  * dtterm window operations and xterm extensions.
    CSI Ps ; Ps ; Ps t
@@ -1253,13 +1336,22 @@ static void
 do_winop(void)
 {
   int arg1 = term.csi_argv[1], arg2 = term.csi_argv[2];
+  if (*cfg.suppress_win && contains(cfg.suppress_win, term.csi_argv[0]))
+    // skip suppressed window operation
+    return;
   switch (term.csi_argv[0]) {
     when 1: win_set_iconic(false);
     when 2: win_set_iconic(true);
     when 3: win_set_pos(arg1, arg2);
     when 4: win_set_pixels(arg1, arg2);
-    when 5: win_set_zorder(true);  // top
-    when 6: win_set_zorder(false); // bottom
+    when 5:
+      if (term.csi_argc != 1)
+        return;
+      win_set_zorder(true);  // top
+    when 6:
+      if (term.csi_argc != 1)
+        return;
+      win_set_zorder(false); // bottom
     when 7: win_invalidate_all(false);  // refresh
     when 8: {
       int def1 = term.csi_argv_defined[1], def2 = term.csi_argv_defined[2];
@@ -1268,45 +1360,70 @@ do_winop(void)
       win_set_chars(arg1 ?: def1 ? rows : term.rows, arg2 ?: def2 ? cols : term.cols);
     }
     when 9: {
+      if (term.csi_argc != 2)
+        return;
       // Ps = 9 ; 0  -> Restore maximized window.
       // Ps = 9 ; 1  -> Maximize window (i.e., resize to screen size).
       // Ps = 9 ; 2  -> Maximize window vertically.
       // Ps = 9 ; 3  -> Maximize window horizontally.
+      int rows0 = term.rows, cols0 = term.cols;
       if (arg1 == 2) {
         // maximize window vertically
         win_set_geom(0, -1, 0, -1);
+        term.rows0 = rows0; term.cols0 = cols0;
       }
       else if (arg1 == 3) {
         // maximize window horizontally
         win_set_geom(-1, 0, -1, 0);
+        term.rows0 = rows0; term.cols0 = cols0;
       }
-      else
-        win_maximise(arg1);
+      else if (arg1 == 1) {
+        win_maximise(1);
+      }
+      else if (arg1 == 0) {
+        win_maximise(0);
+        win_set_chars(term.rows0, term.cols0);
+      }
     }
     when 10:
+      if (term.csi_argc != 2)
+        return;
       // Ps = 1 0 ; 0  -> Undo full-screen mode.
       // Ps = 1 0 ; 1  -> Change to full-screen.
       // Ps = 1 0 ; 2  -> Toggle full-screen.
       if (arg1 == 2)
         win_maximise(-2);
-      else
+      else if (arg1 == 1 || arg1 == 0)
         win_maximise(arg1 ? 2 : 0);
     when 11: child_write(win_is_iconic() ? "\e[1t" : "\e[2t", 4);
     when 13: {
       int x, y;
-      win_get_pos(&x, &y);
+      win_get_scrpos(&x, &y, arg1 == 2);
       child_printf("\e[3;%d;%dt", x, y);
     }
     when 14: {
       int height, width;
-      win_get_pixels(&height, &width);
+      win_get_pixels(&height, &width, arg1 == 2);
       child_printf("\e[4;%d;%dt", height, width);
     }
+    when 15: {
+      int w, h;
+      search_monitors(&w, &h, 0, false, 0);
+      child_printf("\e[5;%d;%dt", h, w);
+    }
+    when 16: child_printf("\e[6;%d;%dt", cell_height, cell_width);
     when 18: child_printf("\e[8;%d;%dt", term.rows, term.cols);
     when 19: {
+#ifdef size_of_monitor_only
+#warning not what xterm reports
       int rows, cols;
       win_get_screen_chars(&rows, &cols);
       child_printf("\e[9;%d;%dt", rows, cols);
+#else
+      int w, h;
+      search_monitors(&w, &h, 0, false, 0);
+      child_printf("\e[9;%d;%dt", h / cell_height, w / cell_width);
+#endif
     }
     when 22:
       if (arg1 == 0 || arg1 == 2)
@@ -1448,6 +1565,64 @@ do_csi(uchar c)
         set_modes(val & 1);
       }
     }
+    when CPAIR('#', '{'): { /* Push video attributes onto stack (XTPUSHSGR) */
+      cattr ca = term.curs.attr;
+      cattrflags caflagsmask = 0;
+
+      void set_push(int attr) {
+        switch (attr) {
+          when 1: caflagsmask |= ATTR_BOLD;
+          when 2: caflagsmask |= ATTR_DIM;
+          when 3: caflagsmask |= ATTR_ITALIC;
+          when 4 or 21: caflagsmask |= UNDER_MASK;
+          when 5 or 6: caflagsmask |= ATTR_BLINK | ATTR_BLINK2;
+          when 7: caflagsmask |= ATTR_REVERSE;
+          when 8: caflagsmask |= ATTR_INVISIBLE;
+          when 9: caflagsmask |= ATTR_STRIKEOUT;
+          when 20: caflagsmask |= FONTFAM_MASK;
+          when 53: caflagsmask |= ATTR_OVERL;
+          when 58: caflagsmask |= ATTR_ULCOLOUR;
+          when 10: caflagsmask |= ATTR_FGMASK;
+          when 11: caflagsmask |= ATTR_BGMASK;
+        }
+      }
+
+      if (!term.csi_argv_defined[0])
+        for (int a = 1; a < 90; a++)
+          set_push(a);
+      else
+        for (uint i = 0; i < term.csi_argc; i++) {
+          //printf("XTPUSHSGR[%d] %d\n", i, term.csi_argv[i]);
+          set_push(term.csi_argv[i]);
+        }
+      if ((ca.attr & caflagsmask & ATTR_FGMASK) != TRUE_COLOUR)
+        ca.truefg = 0;
+      if ((ca.attr & caflagsmask & ATTR_BGMASK) != TRUE_COLOUR)
+        ca.truebg = 0;
+      if (!(caflagsmask & ATTR_ULCOLOUR))
+        ca.ulcolr = (colour)-1;
+      // push
+      //printf("XTPUSHSGR &%llX %llX %06X %06X %06X\n", caflagsmask, ca.attr, ca.truefg, ca.truebg, ca.ulcolr);
+      push_attrs(ca, caflagsmask);
+    }
+    when CPAIR('#', '}'): { /* Pop video attributes from stack (XTPOPSGR) */
+      //printf("XTPOPSGR\n");
+      // pop
+      cattr ca;
+      cattrflags caflagsmask;
+      if (pop_attrs(&ca, &caflagsmask)) {
+        //printf("XTPOPSGR &%llX %llX %06X %06X %06X\n", caflagsmask, ca.attr, ca.truefg, ca.truebg, ca.ulcolr);
+        // merge
+        term.curs.attr.attr = (term.curs.attr.attr & ~caflagsmask)
+                              | (ca.attr & caflagsmask);
+        if ((ca.attr & caflagsmask & ATTR_FGMASK) == TRUE_COLOUR)
+          term.curs.attr.truefg = ca.truefg;
+        if ((ca.attr & caflagsmask & ATTR_BGMASK) == TRUE_COLOUR)
+          term.curs.attr.truebg = ca.truebg;
+        if (caflagsmask & ATTR_ULCOLOUR)
+          term.curs.attr.ulcolr = ca.ulcolr;
+      }
+    }
     when CPAIR('$', 'p'): { /* DECRQM: request (private) mode */
       int arg = term.csi_argv[0];
       child_printf("\e[%s%u;%u$y",
@@ -1469,6 +1644,12 @@ do_csi(uchar c)
         // Drop escape sequence from print buffer and finish printing.
         while (term.printbuf[--term.printbuf_pos] != '\e');
         term_print_finish();
+      }
+      else if (arg0 == 10 && !term.esc_mod) {
+        term_export_html(false);
+      }
+      else if (arg0 == 0 && !term.esc_mod) {
+        print_screen();
       }
     when 'g':        /* TBC: clear tabs */
       if (!arg0)
@@ -1501,8 +1682,12 @@ do_csi(uchar c)
       * and also allowed any number of rows from 24 and above to be set.
       */
       if (arg0 >= 24) {
-        win_set_chars(arg0, term.cols);
-        term.selected = false;
+        if (*cfg.suppress_win && contains(cfg.suppress_win, 24))
+          ; // skip suppressed window operation
+        else {
+          win_set_chars(arg0, term.cols);
+          term.selected = false;
+        }
       }
       else
         do_winop();
@@ -1941,6 +2126,10 @@ do_dcs(void)
         child_printf("\eP1$r%u q\e\\", 
                      (term.cursor_type >= 0 ? term.cursor_type * 2 : 0) + 1
                      + !(term.cursor_blinks & 1));
+      } else if (!strcmp(s, "t") && term.rows >= 24) {  // DECSLPP (lines)
+        child_printf("\eP1$r%ut\e\\", term.rows);
+      } else if (!strcmp(s, "$|")) {  // DECSCPP (columns)
+        child_printf("\eP1$r%u$|\e\\", term.cols);
       } else {
         child_printf("\eP0$r%s\e\\", s);
       }
@@ -2046,6 +2235,10 @@ do_cmd(void)
   char *s = term.cmd_buf;
   s[term.cmd_len] = 0;
 
+  if (*cfg.suppress_osc && contains(cfg.suppress_osc, term.cmd_num))
+    // skip suppressed OSC command
+    return;
+
   switch (term.cmd_num) {
     when 0 or 2: win_set_title(s);  // ignore icon title
     when 4:   do_colour_osc(true, 4, false);
@@ -2059,16 +2252,12 @@ do_cmd(void)
     when 104: do_colour_osc(true, 4, true);
     when 105: do_colour_osc(true, 5, true);
     when 10:  do_colour_osc(false, FG_COLOUR_I, false);
-    when 11:  if (*term.cmd_buf == '*') {
+    when 11:  if (strchr("*_%", *term.cmd_buf)) {
                 wchar * bn = cs__mbstowcs(term.cmd_buf);
                 wstrset(&cfg.background, bn);
                 free(bn);
-                win_invalidate_all(true);
-              }
-              else if (*term.cmd_buf == '_') {
-                wchar * bn = cs__mbstowcs(term.cmd_buf + 1);
-                wstrset(&cfg.background, bn);
-                free(bn);
+                if (*term.cmd_buf == '%')
+                  scale_to_image_ratio();
                 win_invalidate_all(true);
               }
               else
@@ -2749,3 +2938,4 @@ term_write(const char *buf, uint len)
     term.printbuf_pos = 0;
   }
 }
+

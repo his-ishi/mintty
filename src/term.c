@@ -224,7 +224,6 @@ term_reset(bool full)
     term.wheel_reporting = true;
     term.echoing = false;
     term.bracketed_paste = false;
-    term.show_scrollbar = true;  // enable_scrollbar not reset by xterm
     term.wide_indic = false;
     term.wide_extra = false;
     term.disable_bidi = false;
@@ -243,8 +242,8 @@ term_reset(bool full)
   term.sixel_scrolls_left = 0;
 
   term.cursor_type = -1;
+  term.cursor_blinks = -1;
   if (full) {
-    term.cursor_blinks = -1;  // not reset by xterm
     term.blink_is_real = cfg.allow_blinking;
   }
 
@@ -887,6 +886,8 @@ term_resize(int newrows, int newcols)
 
   term.rows = newrows;
   term.cols = newcols;
+  term.rows0 = newrows;
+  term.cols0 = newcols;
 
   term_switch_screen(on_alt_screen, false);
 }
@@ -1041,6 +1042,11 @@ disp_do_scroll(int topscroll, int botscroll, int scrolllines)
 void
 term_do_scroll(int topline, int botline, int lines, bool sb)
 {
+  if (term.hovering) {
+    term.hovering = false;
+    win_update(true);
+  }
+
 #ifdef use_display_scrolling
   int scrolllines = lines;
 #endif
@@ -1149,8 +1155,22 @@ term_do_scroll(int topline, int botline, int lines, bool sb)
 void
 term_erase(bool selective, bool line_only, bool from_begin, bool to_end)
 {
-  term_cursor *curs = &term.curs;
+  term_cursor * curs = &term.curs;
   pos start, end;
+
+  // avoid clearing a "pending wrap" position, where the cursor is 
+  // held back on the previous character if it's the last of the line
+  if (curs->wrapnext) {
+#if 0
+    if (!from_begin && to_end)
+      return;  // simple approach
+#else
+    static term_cursor c;
+    c = term.curs;
+    incpos(c);
+    curs = &c;
+#endif
+  }
 
   if (from_begin)
     start = (pos){.y = line_only ? curs->y : 0, .x = 0};
@@ -1204,6 +1224,7 @@ term_erase(bool selective, bool line_only, bool from_begin, bool to_end)
     }
   }
 }
+
 
 #define EM_pres 1
 #define EM_pict 2
@@ -2372,6 +2393,11 @@ term_invalidate(int left, int top, int right, int bottom)
 void
 term_scroll(int rel, int where)
 {
+  if (term.hovering) {
+    term.hovering = false;
+    win_update(true);
+  }
+
   int sbtop = -sblines();
   int sbbot = term_last_nonempty_line();
   bool do_schedule_update = false;
@@ -2410,10 +2436,14 @@ term_scroll(int rel, int where)
 void
 term_set_focus(bool has_focus, bool may_report)
 {
+  if (!has_focus)
+    term.hovering = false;
+
   if (has_focus != term.has_focus) {
     term.has_focus = has_focus;
     term_schedule_cblink();
   }
+
   if (has_focus != term.focus_reported && may_report) {
     term.focus_reported = has_focus;
     if (term.report_focus)

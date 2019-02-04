@@ -226,6 +226,7 @@ typedef struct {
 
 typedef struct {
   ushort lattr;
+  ushort wrappos;
   ushort cols;    /* number of real columns on the line */
   ushort size;    /* number of allocated termchars
                      (cc-lists may make this > cols) */
@@ -277,6 +278,7 @@ typedef enum {
 
 typedef struct {
   int y, x;
+  bool r;
 } pos;
 
 typedef enum {
@@ -393,6 +395,7 @@ struct term {
   uint printbuf_size, printbuf_pos;
 
   int  rows, cols;
+  int  rows0, cols0;
   bool has_focus;
   bool focus_reported;
   bool in_vbell;
@@ -540,7 +543,7 @@ extern void term_paint(void);
 extern void term_invalidate(int left, int top, int right, int bottom);
 extern void term_open(void);
 extern void term_copy(void);
-extern void term_paste(wchar *, uint len);
+extern void term_paste(wchar *, uint len, bool all);
 extern void term_send_paste(void);
 extern void term_cancel_paste(void);
 extern void term_cmd(char * cmdpat);

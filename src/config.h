@@ -78,6 +78,7 @@ typedef struct {
   bool backspace_sends_bs;
   bool delete_sends_del;
   bool ctrl_alt_is_altgr;
+  int ctrl_alt_delay_altgr;
   bool old_altgr_detection;
   bool clip_shortcuts;
   bool window_shortcuts;
@@ -94,6 +95,7 @@ typedef struct {
   string key_break;	// VK_CANCEL
   string key_menu;	// VK_APPS
   string key_scrlock;	// VK_SCROLL
+  wstring key_commands;
   // Mouse
   bool copy_on_select;
   bool copy_as_rtf;
@@ -105,6 +107,7 @@ typedef struct {
   bool clicks_target_app;
   char click_target_mod;
   bool hide_mouse;
+  bool elastic_mouse;
   // Window
   int cols, rows;
   int scrollback_lines;
@@ -146,6 +149,12 @@ typedef struct {
   // "Hidden"
   int bidi;
   bool disable_alternate_screen;
+  string suppress_sgr;
+  string suppress_dec;
+  string suppress_win;
+  string suppress_osc;
+  string suppress_nrc;
+  string filter_paste;
   bool input_clears_selection;
   char charwidth;
   char emojis;

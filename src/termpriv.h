@@ -53,4 +53,7 @@ extern termline *decompressline(uchar *, int *bytes_used);
 
 extern termchar *term_bidi_line(termline *, int scr_y);
 
+extern void term_export_html(bool do_open);
+extern void print_screen(void);
+
 #endif
